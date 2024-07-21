@@ -4,7 +4,8 @@ CUSTOM PROXY
 
 Proxy for HTTP/1.0 standard protocol 
 
-RFC: datatracker.ietf.org/doc/html/rfc2616
+RFC: datatracker.ietf.org/doc/html/rfc1945
 RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
+RES: Beej's Guide to Network Programming - Using Internet Sockets
 RES: en.wikipedia.org/wiki/Proxy_server
 RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition

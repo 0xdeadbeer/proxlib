@@ -1,16 +1,104 @@
-#include "proxy_parse.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include "structs.h"
 
-#define PROXY_PORT 80
+#define PROXY_PORT 2020
 #define PROXY_CONN 20
+#define PROXY_MAX_MSGLEN 10*1024
+#define TITLE_DELIM " "
+
+struct http_msg *child_msg;
+
+int parse_title(char *msgbuff) {
+    char *title_end = strrchr(msgbuff, '\n');
+    if (title_end == NULL) {
+        return -1; 
+    }
+
+    const int title_len = title_end - msgbuff;
+    char title[title_len]; 
+    strncpy(title, msgbuff, title_len);
+
+    char *title_sub; 
+    int index; 
+    for (index = 0, title_sub = strtok(title, TITLE_DELIM); 
+            title_sub != NULL; 
+            title_sub = strtok(NULL, TITLE_DELIM), index++) {
+        
+        char *destarr = (char *) calloc(1, strlen(title_sub)+1); 
+        if (destarr == NULL) {
+            goto error_title_props;
+        }
+
+        if (index == 0) {
+            child_msg->method = destarr;
+            strcpy(child_msg->method, title_sub);
+        }
+        else if (index == 1) {
+            child_msg->uri = destarr;
+            strcpy(child_msg->uri, title_sub);
+        }
+        else if (index == 2) {
+            child_msg->ver = destarr; 
+            strcpy(child_msg->ver, title_sub);
+        }
+        else {
+            goto error_title_props; 
+        }
+    }
+
+    return 0;
+
+error_title_props:
+    for (int i = 0; i <= index; i++) {
+        free(child_msg+i);
+    }
+
+    return -1;
+}
+
+void handle_request(int sockfd) {
+    int ret;
+    int id = getpid();
+    char msgbuff[PROXY_MAX_MSGLEN]; 
+    memset(msgbuff, 0, sizeof(msgbuff));
+    
+    ret = recv(sockfd, msgbuff, sizeof(msgbuff), 0);
+    if (ret < 0) {
+        fprintf(stderr, "[CHILD %d] Failed to receive data from client\n", id);
+        goto end_sock; 
+    }
+
+    fprintf(stdout, "[CHILD %d] Received data from client: %s\n", id, msgbuff);
+
+    // prepare structs 
+    child_msg = (struct http_msg *) calloc(1, sizeof(struct http_msg));
+    if (child_msg == NULL) {
+        fprintf(stderr, "[CHILD %d] Failed to allocate memory for client structs\n", id);
+        goto end_sock; 
+    }
+
+    // start parsing 
+    ret = parse_title(msgbuff); 
+    if (ret < 0) {
+        fprintf(stderr, "[CHILD %d] Failed to parse the title of the request\n", id);
+        goto end_structs; 
+    }
+
+end_structs: 
+    free(child_msg);
+
+end_sock:
+    close(sockfd);
+}
 
 int main(int argc, char *argv[]) {
 	int server_socket; 
-	int new_fd;
 	int ret; 
 
 	ret = server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);	
@@ -50,10 +138,20 @@ int main(int argc, char *argv[]) {
 			return EXIT_FAILURE;
 		}
 
-		fprintf(stdout, "[CLIENT %d] Successfully connected\n", client_socket);
+        ret = fork();
+        switch (ret) {
+        case -1: 
+            fprintf(stderr, "[CLIENT SOCKET %d] Failed to fork child process to handle the request\n", client_socket);
+            return EXIT_FAILURE; 
+            break; 
+        case 0: 
+            handle_request(client_socket);
+            break;
+        default: 
+            fprintf(stdout, "[PROGRAM] Successfully forked a new child process with PID %d\n", ret);
+            break;
+        }
 	}
-
-	printf("New connection with fd -> %d\n", new_fd);
 
 	return EXIT_SUCCESS;
 }
