@@ -29,7 +29,6 @@ struct http_msg {
     char *ver; 
     int header_num;
     struct header *headers;
-    void *body;
 };
 
 #endif 

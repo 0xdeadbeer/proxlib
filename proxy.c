@@ -119,7 +119,6 @@ int par_line = 0;
 
 void handle_request(int sockfd) {
     int ret;
-    int id = getpid();
 
     char *msgbuff = (char *) calloc(1, PROXY_MAX_MSGLEN);
     if (msgbuff == NULL) {
@@ -129,17 +128,14 @@ void handle_request(int sockfd) {
     
     ret = recv(sockfd, msgbuff, PROXY_MAX_MSGLEN, 0);
     if (ret < 0) {
-        fprintf(stderr, "[CHILD %d] Failed to receive data from client\n", id);
+        fprintf(stderr, "Failed to receive data from client\n");
         goto end_sock; 
     }
-
-    fprintf(stdout, "[CHILD %d] Received data from client: %s\n", id, msgbuff);
 
     // prepare structs 
     child_msg = (struct http_msg *) calloc(1, sizeof(struct http_msg));
     if (child_msg == NULL) {
-        fprintf(stderr, "[CHILD %d] Failed to allocate memory for client"
-                        "structs\n", id);
+        fprintf(stderr, "Failed to allocate memory for client structs\n");
         goto end_sock; 
     }
 
@@ -157,12 +153,18 @@ void handle_request(int sockfd) {
         ln = strtok(NULL, "\n"); 
     }
 
-    fprintf(stdout, "I am done here.... zzzz \n");
+    // logic 
 
-    for (;;);
-
-//end_structs: 
-    //free(child_msg);
+    for (int i = 0; i < child_msg->header_num; i++) {
+        struct header *header = &child_msg->headers[i];
+        free(header->key);
+        free(header->value);
+        free(header);
+    }
+    free(child_msg->method);
+    free(child_msg->uri);
+    free(child_msg->ver);
+    free(child_msg);
 
 end_sock:
     close(sockfd);
