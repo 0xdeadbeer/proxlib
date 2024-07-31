@@ -1,12 +1,11 @@
-CC=bear --append -- gcc
-CFLAGS= -g -Wall -Werror
+CC=gcc
+CFLAGS= -g3 -Wall -Werror
 
 all: proxy
 
 proxy: proxy.c
-	$(CC) $(CFLAGS) -o proxy_parse.o -c proxy_parse.c
 	$(CC) $(CFLAGS) -o proxy.o -c proxy.c
-	$(CC) $(CFLAGS) -o proxy proxy_parse.o proxy.o
+	$(CC) $(CFLAGS) -o proxy proxy.o
 
 clean:
 	rm -f proxy *.o

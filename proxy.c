@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include <regex.h>
 #include "structs.h"
 
 #define PROXY_PORT 2020
@@ -12,54 +13,77 @@
 #define PROXY_MAX_MSGLEN 10*1024
 #define TITLE_DELIM " "
 
+#define REGEX_MATCHN 4
+#define REGEX_TITLE "^([A-Z]+)[ ]+([a-zA-Z0-9\\:\\/\\_\\-\\.\\,]+)[ ]+([a-zA-Z0-9\\_\\-\\.\\,\\/]+)[ ]*[$\n\r]"
+#define REGEX_HEADER "^(.*)[$\\n\\r]"
+
 struct http_msg *child_msg;
+regex_t preg; 
+regmatch_t pmatch[REGEX_MATCHN];
+
+void *extractsub(const char *msg, regmatch_t match) {
+    int buflen = match.rm_eo - match.rm_so;
+    void *buf = (void *) calloc(1, buflen);
+    if (buf == NULL) 
+        goto _return;
+
+    sprintf(buf, "%.*s", buflen, &msg[match.rm_so]); 
+
+_return:
+    return buf;
+}
+
+int parse_header(char *msgbuff) {
+    return 0;
+}
 
 int parse_title(char *msgbuff) {
-    char *title_end = strrchr(msgbuff, '\n');
-    if (title_end == NULL) {
-        return -1; 
-    }
+    int ret; 
 
-    const int title_len = title_end - msgbuff;
-    char title[title_len]; 
-    strncpy(title, msgbuff, title_len);
+    ret = regcomp(&preg, REGEX_TITLE, REG_EXTENDED);
+    if (ret != 0)
+        goto _err;
 
-    char *title_sub; 
-    int index; 
-    for (index = 0, title_sub = strtok(title, TITLE_DELIM); 
-            title_sub != NULL; 
-            title_sub = strtok(NULL, TITLE_DELIM), index++) {
-        
-        char *destarr = (char *) calloc(1, strlen(title_sub)+1); 
-        if (destarr == NULL) {
-            goto error_title_props;
-        }
+    ret = regexec(&preg, msgbuff, REGEX_MATCHN, pmatch, 0);
+    if (ret != 0)
+        goto _err;
 
-        if (index == 0) {
-            child_msg->method = destarr;
-            strcpy(child_msg->method, title_sub);
-        }
-        else if (index == 1) {
-            child_msg->uri = destarr;
-            strcpy(child_msg->uri, title_sub);
-        }
-        else if (index == 2) {
-            child_msg->ver = destarr; 
-            strcpy(child_msg->ver, title_sub);
-        }
-        else {
-            goto error_title_props; 
-        }
-    }
+    child_msg->method = extractsub(msgbuff, pmatch[1]);
+    if (child_msg->method == NULL) 
+        goto _err;
 
+    child_msg->uri = extractsub(msgbuff, pmatch[2]);
+    if (child_msg->uri == NULL) 
+        goto _err;
+
+    child_msg->ver = extractsub(msgbuff, pmatch[3]); 
+    if (child_msg->ver == NULL)
+        goto _err;
+
+    goto _ok;
+
+_err: 
+    regfree(&preg);
+    return -1; 
+
+_ok:
+    regfree(&preg);
     return 0;
 
-error_title_props:
-    for (int i = 0; i <= index; i++) {
-        free(child_msg+i);
+}
+
+int par_line = 0; 
+
+int parse_line(char *line, int line_count) {
+    int ret = 0; 
+
+    if (line_count == 0) {
+        ret = parse_title(line);
+    } else {
+        ret = parse_header(line);
     }
 
-    return -1;
+    return ret;
 }
 
 void handle_request(int sockfd) {
@@ -83,14 +107,19 @@ void handle_request(int sockfd) {
         goto end_sock; 
     }
 
+    for (char *ln = strtok(msgbuff, "\n"); ln != NULL; ln = strtok(NULL, "\n"), par_line++) {
+        parse_line(ln, par_line);
+    }
+    
     // start parsing 
-    ret = parse_title(msgbuff); 
+    /*ret = parse_title(msgbuff); 
     if (ret < 0) {
         fprintf(stderr, "[CHILD %d] Failed to parse the title of the request\n", id);
         goto end_structs; 
-    }
+    }*/
 
-end_structs: 
+
+//end_structs: 
     free(child_msg);
 
 end_sock:
