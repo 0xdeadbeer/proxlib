@@ -1,11 +1,22 @@
-============
-CUSTOM PROXY
-============
++==================+
+|   CUSTOM PROXY   |
++==================+
 
-Proxy for HTTP/1.0 standard protocol 
+    Proxy for HTTP/1.0 standard protocol 
 
-RFC: datatracker.ietf.org/doc/html/rfc1945
-RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
-RES: Beej's Guide to Network Programming - Using Internet Sockets
-RES: en.wikipedia.org/wiki/Proxy_server
-RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition
+    RFC: datatracker.ietf.org/doc/html/rfc1945
+    RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
+    RES: Beej's Guide to Network Programming - Using Internet Sockets
+    RES: en.wikipedia.org/wiki/Proxy_server
+    RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition
+
+COMMITS
+    
+    Each commit is prefixed with an indicator token of what the change is
+    *mostly* about. List of tokens is: 
+    
+        * init: change initialized the repository
+        * repo: change is about the repository in general
+        * proxy: change is about the proxy in general
+        * logic: change is about proxy logic - parsing, forwarding, ...
+
