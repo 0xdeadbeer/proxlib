@@ -10,6 +10,11 @@
     RES: en.wikipedia.org/wiki/Proxy_server
     RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition
 
+TECHNICALS 
+
+    Parsing is done through a chain of regex expressions that verify 
+    the format of received HTTP/1.0 messages.
+
 COMMITS
     
     Each commit is prefixed with an indicator token of what the change is
@@ -19,4 +24,5 @@ COMMITS
         * repo: change is about the repository in general
         * proxy: change is about the proxy in general
         * logic: change is about proxy logic - parsing, forwarding, ...
+        * fix: change is about fixing a bug or TODO
 

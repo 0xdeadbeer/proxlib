@@ -13,6 +13,7 @@
 struct http_msg *child_msg;
 regex_t preg; 
 regmatch_t pmatch[REGEX_MATCHN];
+int par_line = 0; 
 
 void *extractsub(const char *msg, regmatch_t match) {
     int buflen = match.rm_eo - match.rm_so;
@@ -98,6 +99,28 @@ _err:
 
 }
 
+void free_title() {
+    free(child_msg->method);
+    free(child_msg->uri);
+    free(child_msg->ver);
+}
+
+void free_headers() {
+    for (int i = 0; i < child_msg->header_num; i++) {
+        struct header *header = &child_msg->headers[i];
+        free(header->key);
+        free(header->value);
+    }
+    free(child_msg->headers);
+}
+
+void free_message() {
+    free_title();
+    free_headers();
+    free(child_msg);
+}
+
+
 int parse_line(char *line, int line_count) {
     int ret = 0; 
 
@@ -109,13 +132,6 @@ int parse_line(char *line, int line_count) {
 
     return ret;
 }
-
-int test(char *line, int num) {
-    fprintf(stdout, "line %s and num %d\n", line, num);
-    return 0;
-}
-
-int par_line = 0; 
 
 void handle_request(int sockfd) {
     int ret;
@@ -139,14 +155,7 @@ void handle_request(int sockfd) {
         goto end_sock; 
     }
 
-    char *ln = strdup(msgbuff); 
-    if (!ln) {
-        fprintf(stdout, "Not enough dynamic memory\n");
-        goto end_sock; 
-    }
-
-    ln = strtok(ln, "\n");
-
+    char *ln = strtok(msgbuff, "\n");
     while (ln) {
         parse_line(ln, par_line);
         par_line++; 
@@ -155,16 +164,8 @@ void handle_request(int sockfd) {
 
     // logic 
 
-    for (int i = 0; i < child_msg->header_num; i++) {
-        struct header *header = &child_msg->headers[i];
-        free(header->key);
-        free(header->value);
-        free(header);
-    }
-    free(child_msg->method);
-    free(child_msg->uri);
-    free(child_msg->ver);
-    free(child_msg);
+    free_message();
+    free(msgbuff);
 
 end_sock:
     close(sockfd);
