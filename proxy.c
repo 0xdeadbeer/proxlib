@@ -10,6 +10,7 @@
 #include <regex.h>
 #include "structs.h"
 
+int debug = 1; 
 struct http_msg *child_msg;
 regex_t preg; 
 regmatch_t pmatch[REGEX_MATCHN];
@@ -120,7 +121,6 @@ void free_message() {
     free(child_msg);
 }
 
-
 int parse_line(char *line, int line_count) {
     int ret = 0; 
 
@@ -155,6 +155,10 @@ void handle_request(int sockfd) {
         goto end_sock; 
     }
 
+    if (debug) {
+        fprintf(stdout, "Received buffer: %s\n", msgbuff);
+    }
+
     char *ln = strtok(msgbuff, "\n");
     while (ln) {
         parse_line(ln, par_line);
@@ -162,7 +166,7 @@ void handle_request(int sockfd) {
         ln = strtok(NULL, "\n"); 
     }
 
-    // logic 
+    // logic
 
     free_message();
     free(msgbuff);
@@ -193,6 +197,13 @@ int doserver(void) {
 		return -1;
 	}
 
+    int on = 1; 
+    ret = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    if (ret < 0) {
+        fprintf(stderr, "Failed flagging server socket as reusable\n");
+        return -1;
+    }
+
 	struct sockaddr_in serv_addr; 
 
 	memset(&serv_addr, 0, sizeof(serv_addr));
@@ -204,7 +215,7 @@ int doserver(void) {
     ret = bind(server_socket, (struct sockaddr *) &serv_addr,
             sizeof(serv_addr));
 	if (ret < 0) {
-		fprintf(stderr, "Failed to bind to port %d\n", PROXY_PORT);
+        fprintf(stderr, "Failed to bind to port %d\n", PROXY_PORT);
 		return -1;
 	}
 
@@ -232,12 +243,13 @@ int doserver(void) {
         ret = fork();
         switch (ret) {
         case -1: 
-            fprintf(stderr, "[CLIENT SOCKET %d] Failed to fork child process to"
-                            "handle the request\n", client_socket);
+            fprintf(stderr, "[CLIENT SOCKET %d] Failed to fork child process"
+                            "to handle the request\n", client_socket);
             return -1; 
             break; 
         case 0: 
             handle_request(client_socket);
+            return 0;
             break;
         default: 
             fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
@@ -273,7 +285,8 @@ int doclient(void) {
 		return -1;
 	}
 
-    ret = connect(client_socket, (struct sockaddr *) &serv_addr, sizeof(serv_addr));
+    ret = connect(client_socket, (struct sockaddr *) &serv_addr,
+            sizeof(serv_addr));
 	if(ret < 0)
 	{
         fprintf(stderr, "Failed connecting to remote server\n");
@@ -282,7 +295,8 @@ int doclient(void) {
 
     int bytes = 0; 
     do {
-        bytes += send(client_socket, CLIENT_MESSAGE, sizeof(CLIENT_MESSAGE), 0);
+        bytes += send(client_socket, CLIENT_MESSAGE, 
+                sizeof(CLIENT_MESSAGE), 0);
     } while (bytes != sizeof(CLIENT_MESSAGE));
 
     fprintf(stdout, "Sent %d bytes to server\n", bytes);
