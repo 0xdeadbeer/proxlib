@@ -1,4 +1,4 @@
-CC=gcc
+CC=bear --append -- gcc
 CFLAGS= -g3 -Wall -Werror
 
 all: proxy

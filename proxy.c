@@ -133,6 +133,87 @@ int parse_line(char *line, int line_count) {
     return ret;
 }
 
+char *getheader(char *key) {
+    char *ret = NULL; 
+    for (int i = 0; i < child_msg->header_num; i++) {
+        struct header *hdr = &child_msg->headers[i];
+        if (strcmp(hdr->key, key)) 
+            continue; 
+
+        ret = hdr->value; 
+    }
+
+    return ret; 
+}
+
+char *doforward(char *host, char *msgbuff) {
+    struct addrinfo hints; 
+    struct addrinfo *res; 
+    int client_socket; 
+    int ret; 
+    char *host_response = NULL;
+
+    memset(&hints, 0, sizeof(hints)); 
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    ret = getaddrinfo(host, "80", &hints, &res);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to determine host '%s'\n", host);
+        goto _return;
+    }
+
+    ret = client_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to create a client socket\n");
+        goto _return;
+    }
+
+    ret = connect(client_socket, res->ai_addr, res->ai_addrlen);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to connect to destination host '%s'\n", host);
+        goto _return;
+    }
+
+    int bytes = 0; 
+    do {
+        bytes += send(client_socket, msgbuff+bytes, 
+                PROXY_MAX_MSGLEN-bytes, 0);
+    } while (bytes < PROXY_MAX_MSGLEN);
+    
+    
+    host_response = (char *) calloc(1, PROXY_MAX_MSGLEN);
+    if (host_response == NULL) {
+        fprintf(stderr, "Not enough dynamic memory\n");
+        goto _free_sock;
+    }
+
+    /*bytes = 0; 
+    while (bytes < PROXY_MAX_MSGLEN) {
+        fprintf(stdout, "bytes 2 -> %d\n", bytes);
+        int new_bytes = recv(client_socket, host_response+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+        bytes += new_bytes;
+
+        fprintf(stdout, "New bytes -> %d, bytes -> %d\n", new_bytes, bytes);
+
+        if (!new_bytes) 
+            break;
+    }*/
+
+    recv(client_socket, host_response, PROXY_MAX_MSGLEN, 0);
+
+
+    if (debug) {
+        fprintf(stdout, "RECEIVED %s\n", host_response);
+    }
+
+_free_sock: 
+    close(client_socket);
+
+_return: 
+    return host_response;
+}
+
 void handle_request(int sockfd) {
     int ret;
 
@@ -159,7 +240,13 @@ void handle_request(int sockfd) {
         fprintf(stdout, "Received buffer: %s\n", msgbuff);
     }
 
-    char *ln = strtok(msgbuff, "\n");
+    char *ln = strdup(msgbuff); 
+    if (!ln) {
+        fprintf(stderr, "Not enough dynamic memory\n");
+        goto free_msg; 
+    }
+
+    ln = strtok(ln, "\n");
     while (ln) {
         parse_line(ln, par_line);
         par_line++; 
@@ -167,8 +254,47 @@ void handle_request(int sockfd) {
     }
 
     // logic
+    fprintf(stdout, 
+        "=====PARSE=RESULTS=====\n"
+        " * Method value: '%s'\n"
+        " * URI value: '%s'\n"
+        " * Version value: '%s'\n"
+        " * Number of headers: %d\n"
+        " * Headers:\n",
+        child_msg->method,
+        child_msg->uri, 
+        child_msg->ver,
+        child_msg->header_num
+    );
+    for (int i = 0; i < child_msg->header_num; i++) {
+        struct header *hdr = &child_msg->headers[i];
+        fprintf(stdout, "   * Key: '%s', Value: '%s'\n", hdr->key, hdr->value);
+    }
+    fprintf(stdout, "=====PARSE=RESULTS=====\n");
+
+    char *host = getheader("Host");
+
+    char *response = doforward(host, msgbuff);
+    if (debug) {
+        fprintf(stdout, "Response from host '%s': %s\n", host, response);
+    }
+
+    // reply to client 
+    int bytes = 0; 
+    do {
+        bytes += send(sockfd, response+bytes, 
+                PROXY_MAX_MSGLEN-bytes, 0);
+    } while (bytes < PROXY_MAX_MSGLEN);
+
+    if (debug) {
+        fprintf(stdout, "Sent response from host '%s' to client. Totaling %d bytes of transfer\n", host, bytes);
+    }
+
+    free(response);
 
     free_message();
+
+free_msg:
     free(msgbuff);
 
 end_sock:
