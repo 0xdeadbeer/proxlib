@@ -1,6 +1,8 @@
 #ifndef STRUCTS_H
 #define STRUCTS_H
 
+#define MAX_BOUND 100
+
 #define SERVER_MODE "server"
 #define CLIENT_MODE "client"
 
@@ -18,12 +20,20 @@
                        "Host: google.com\n"\
                        "Authorization: Bearer ffja2439gjawgjgojserg\n"
 
+#define STATEM_RCV_CLT 0b00000001
+#define STATEM_PRS_CLT 0b00000010
+#define STATEM_FWD_SRV 0b00000100
+#define STATEM_RCV_SRV 0b00001000
+#define STATEM_PRS_SRV 0b00010000
+#define STATEM_FWD_CLT 0b00100000
+#define STATEM_ERR     0b10000000
+
 struct header {
     char *key; 
     char *value; 
 };
 
-struct http_msg {
+struct request {
     char *method; 
     char *uri; 
     char *ver; 
@@ -31,4 +41,4 @@ struct http_msg {
     struct header *headers;
 };
 
-#endif 
+#endif

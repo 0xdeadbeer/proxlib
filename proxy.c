@@ -11,10 +11,16 @@
 #include "structs.h"
 
 int debug = 1; 
-struct http_msg *child_msg;
+struct request *child_msg;
 regex_t preg; 
 regmatch_t pmatch[REGEX_MATCHN];
-int par_line = 0; 
+
+int statem; 
+
+int clt_sock = -1;
+int srv_sock = -1;
+char *clt_msg = NULL;
+char *srv_msg = NULL;
 
 void *extractsub(const char *msg, regmatch_t match) {
     int buflen = match.rm_eo - match.rm_so;
@@ -37,7 +43,7 @@ int parse_header(char *msgbuff) {
 
     ret = regexec(&preg, msgbuff, REGEX_MATCHN, pmatch, 0); 
     if (ret != 0) 
-        goto _err; 
+        goto _ok; 
 
     char *key = extractsub(msgbuff, pmatch[1]);
     if (key == NULL) 
@@ -59,6 +65,8 @@ int parse_header(char *msgbuff) {
             child_msg->header_num*sizeof(struct header));
 
     child_msg->headers[last_index] = new_header;
+
+_ok:
 
     regfree(&preg);
     return 0;
@@ -146,159 +154,179 @@ char *getheader(char *key) {
     return ret; 
 }
 
-char *doforward(char *host, char *msgbuff) {
-    struct addrinfo hints; 
-    struct addrinfo *res; 
-    int client_socket; 
-    int ret; 
-    char *host_response = NULL;
+void do_err(void) {
+    int statem_code = statem & (~STATEM_ERR);
+    fprintf(stderr, "[%d,%d,%d] Errored out!\n", statem, statem_code, STATEM_ERR);
+}
 
-    memset(&hints, 0, sizeof(hints)); 
-    hints.ai_family = AF_INET;
+int do_fwd_clt(void) {
+    int bytes = 0; 
+    do {
+        bytes += send(clt_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+    } while (bytes < PROXY_MAX_MSGLEN);
+
+    return 0;
+}
+
+// TODO: add parsing ability
+int do_prs_srv(void) {
+    int ret = 0; 
+    return ret; 
+}
+
+int do_rcv_srv(void) {
+    int ret = recv(srv_sock, srv_msg, PROXY_MAX_MSGLEN, 0);
+    if (ret < 0) 
+        return -1;
+
+    if (debug) {
+        fprintf(stdout, "[%d] Received server message: %s\n", statem, clt_msg);
+    }
+
+    return 0; 
+}
+
+int con_srv(void) {
+    int ret;
+    char *host = getheader("Host");
+    if (!host)
+        return -1;
+    
+    struct addrinfo hints; 
+    struct addrinfo *res;
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; 
     hints.ai_socktype = SOCK_STREAM;
 
     ret = getaddrinfo(host, "80", &hints, &res);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to determine host '%s'\n", host);
-        goto _return;
-    }
+    if (ret < 0) 
+        return -1;
 
-    ret = client_socket = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to create a client socket\n");
-        goto _return;
-    }
+    ret = srv_sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (ret < 0)
+        return -1;
 
-    ret = connect(client_socket, res->ai_addr, res->ai_addrlen);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to connect to destination host '%s'\n", host);
-        goto _return;
-    }
+    ret = connect(srv_sock, res->ai_addr, res->ai_addrlen);
+    if (ret < 0)
+        return -1;
 
-    int bytes = 0; 
-    do {
-        bytes += send(client_socket, msgbuff+bytes, 
-                PROXY_MAX_MSGLEN-bytes, 0);
-    } while (bytes < PROXY_MAX_MSGLEN);
-    
-    
-    host_response = (char *) calloc(1, PROXY_MAX_MSGLEN);
-    if (host_response == NULL) {
-        fprintf(stderr, "Not enough dynamic memory\n");
-        goto _free_sock;
-    }
-
-    /*bytes = 0; 
-    while (bytes < PROXY_MAX_MSGLEN) {
-        fprintf(stdout, "bytes 2 -> %d\n", bytes);
-        int new_bytes = recv(client_socket, host_response+bytes, PROXY_MAX_MSGLEN-bytes, 0);
-        bytes += new_bytes;
-
-        fprintf(stdout, "New bytes -> %d, bytes -> %d\n", new_bytes, bytes);
-
-        if (!new_bytes) 
-            break;
-    }*/
-
-    recv(client_socket, host_response, PROXY_MAX_MSGLEN, 0);
-
-
-    if (debug) {
-        fprintf(stdout, "RECEIVED %s\n", host_response);
-    }
-
-_free_sock: 
-    close(client_socket);
-
-_return: 
-    return host_response;
+    return 0;
 }
 
-void handle_request(int sockfd) {
+int do_fwd_srv(void) {
+    int ret = 0;
+    if (srv_sock < 0)
+        ret = con_srv();
+
+    if (ret < 0)
+        return -1;
+
+    int bytes = 0;
+    do {
+        bytes += send(srv_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+    } while (bytes < PROXY_MAX_MSGLEN);
+
+    return 0;
+}
+
+int do_prs_clt(void) {
     int ret;
+    int ln_cnt = 0;
 
-    char *msgbuff = (char *) calloc(1, PROXY_MAX_MSGLEN);
-    if (msgbuff == NULL) {
-        fprintf(stderr, "Not enough dynamic memory\n");
-        goto end_sock;
-    }
-    
-    ret = recv(sockfd, msgbuff, PROXY_MAX_MSGLEN, 0);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to receive data from client\n");
-        goto end_sock; 
-    }
-
-    // prepare structs 
-    child_msg = (struct http_msg *) calloc(1, sizeof(struct http_msg));
-    if (child_msg == NULL) {
-        fprintf(stderr, "Failed to allocate memory for client structs\n");
-        goto end_sock; 
-    }
-
-    if (debug) {
-        fprintf(stdout, "Received buffer: %s\n", msgbuff);
-    }
-
-    char *ln = strdup(msgbuff); 
-    if (!ln) {
-        fprintf(stderr, "Not enough dynamic memory\n");
-        goto free_msg; 
-    }
+    char *ln = strdup(clt_msg);
+    if (!ln)
+        return -1;
 
     ln = strtok(ln, "\n");
     while (ln) {
-        parse_line(ln, par_line);
-        par_line++; 
-        ln = strtok(NULL, "\n"); 
+        ret = parse_line(ln, ln_cnt);
+        if (ret < 0)
+            return -1;
+
+        ln_cnt++;
+        ln = strtok(NULL, "\n");
     }
 
-    // logic
-    fprintf(stdout, 
-        "=====PARSE=RESULTS=====\n"
-        " * Method value: '%s'\n"
-        " * URI value: '%s'\n"
-        " * Version value: '%s'\n"
-        " * Number of headers: %d\n"
-        " * Headers:\n",
-        child_msg->method,
-        child_msg->uri, 
-        child_msg->ver,
-        child_msg->header_num
-    );
-    for (int i = 0; i < child_msg->header_num; i++) {
-        struct header *hdr = &child_msg->headers[i];
-        fprintf(stdout, "   * Key: '%s', Value: '%s'\n", hdr->key, hdr->value);
-    }
-    fprintf(stdout, "=====PARSE=RESULTS=====\n");
+    return 0; 
+}
 
-    char *host = getheader("Host");
-
-    char *response = doforward(host, msgbuff);
-    if (debug) {
-        fprintf(stdout, "Response from host '%s': %s\n", host, response);
-    }
-
-    // reply to client 
-    int bytes = 0; 
-    do {
-        bytes += send(sockfd, response+bytes, 
-                PROXY_MAX_MSGLEN-bytes, 0);
-    } while (bytes < PROXY_MAX_MSGLEN);
+int do_rcv_clt(void) {
+    int ret; 
+    ret = recv(clt_sock, clt_msg, PROXY_MAX_MSGLEN, 0);
+    if (ret < 0)
+        return -1;
 
     if (debug) {
-        fprintf(stdout, "Sent response from host '%s' to client. Totaling %d bytes of transfer\n", host, bytes);
+        fprintf(stdout, "[%d] Received client message: %s\n", statem, clt_msg);
     }
 
-    free(response);
+    return 0; 
+}
 
-    free_message();
+int do_alloc(void) {
+    clt_msg = (char *) calloc(1, PROXY_MAX_MSGLEN);
+    if (!clt_msg)
+        return -1;
 
-free_msg:
-    free(msgbuff);
+    srv_msg = (char *) calloc(1, PROXY_MAX_MSGLEN);
+    if (!srv_msg) 
+        return -1;
 
-end_sock:
-    close(sockfd);
+    child_msg = (struct request *) calloc(1, sizeof(struct request));
+    if (!child_msg) 
+        return -1;
+
+    return 0;
+}
+
+void dostatem() {
+    int ret = do_alloc(); 
+    if (ret < 0) {
+        do_err();
+        return;
+    }
+        
+    for (int counter = 0; counter < MAX_BOUND; counter++) {
+        switch (statem & (~STATEM_ERR)) {
+        case STATEM_RCV_CLT:
+            ret = do_rcv_clt();
+            break;
+        case STATEM_PRS_CLT: 
+            ret = do_prs_clt();
+            break; 
+        case STATEM_FWD_SRV: 
+            ret = do_fwd_srv();
+            break; 
+        case STATEM_RCV_SRV: 
+            ret = do_rcv_srv();
+            break;
+        case STATEM_PRS_SRV: 
+            ret = do_prs_srv();
+            break; 
+        case STATEM_FWD_CLT:
+            ret = do_fwd_clt();
+            break;
+        default: 
+            ret = -1; 
+            break; 
+        }
+
+        if (ret < 0) 
+            statem |= STATEM_ERR;
+
+        if (statem & STATEM_ERR) {
+            do_err();
+            break;
+        }
+
+        if (statem & STATEM_FWD_CLT) {
+            statem = STATEM_RCV_CLT;
+            continue;
+        }
+
+        statem <<= 1;
+    }
 }
 
 void dohelp() {
@@ -374,12 +402,14 @@ int doserver(void) {
             return -1; 
             break; 
         case 0: 
-            handle_request(client_socket);
+            clt_sock = client_socket;
+            statem = STATEM_RCV_CLT;
+            dostatem();
             return 0;
             break;
         default: 
             fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
-                            "with PID %d\n", ret);
+                            " with PID %d\n", ret);
             break;
         }
 	}
