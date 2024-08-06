@@ -1,14 +1,14 @@
 #ifndef STRUCTS_H
 #define STRUCTS_H
 
-#define MAX_BOUND 100
+#define MAX_BOUND 10000
 
 #define SERVER_MODE "server"
 #define CLIENT_MODE "client"
 
 #define PROXY_PORT 2020
 #define PROXY_CONN 20
-#define PROXY_MAX_MSGLEN 1000*1024
+#define PROXY_MAX_MSGLEN 10000*1024
 
 #define REGEX_MATCHN 4
 #define REGEX_TITLE "^([A-Z]+)[ ]+([a-zA-Z0-9\\:/_.,-]+)"\

@@ -11,7 +11,7 @@
 #include "structs.h"
 
 int debug = 1; 
-struct request *child_msg;
+struct request *clt_data;
 regex_t preg; 
 regmatch_t pmatch[REGEX_MATCHN];
 
@@ -20,7 +20,9 @@ int statem;
 int clt_sock = -1;
 int srv_sock = -1;
 char *clt_msg = NULL;
+int clt_msg_len = 0; 
 char *srv_msg = NULL;
+int srv_msg_len = 0;
 
 void *extractsub(const char *msg, regmatch_t match) {
     int buflen = match.rm_eo - match.rm_so;
@@ -58,16 +60,15 @@ int parse_header(char *msgbuff) {
         .value = value
     };
 
-    int last_index = child_msg->header_num;
+    int last_index = clt_data->header_num;
 
-    child_msg->header_num++;
-    child_msg->headers = (void *) realloc(child_msg->headers,
-            child_msg->header_num*sizeof(struct header));
+    clt_data->header_num++;
+    clt_data->headers = (void *) realloc(clt_data->headers,
+            clt_data->header_num*sizeof(struct header));
 
-    child_msg->headers[last_index] = new_header;
+    clt_data->headers[last_index] = new_header;
 
 _ok:
-
     regfree(&preg);
     return 0;
 
@@ -87,16 +88,16 @@ int parse_title(char *msgbuff) {
     if (ret != 0)
         goto _err;
 
-    child_msg->method = extractsub(msgbuff, pmatch[1]);
-    if (child_msg->method == NULL) 
+    clt_data->method = extractsub(msgbuff, pmatch[1]);
+    if (clt_data->method == NULL) 
         goto _err;
 
-    child_msg->uri = extractsub(msgbuff, pmatch[2]);
-    if (child_msg->uri == NULL) 
+    clt_data->uri = extractsub(msgbuff, pmatch[2]);
+    if (clt_data->uri == NULL) 
         goto _err;
 
-    child_msg->ver = extractsub(msgbuff, pmatch[3]); 
-    if (child_msg->ver == NULL)
+    clt_data->ver = extractsub(msgbuff, pmatch[3]); 
+    if (clt_data->ver == NULL)
         goto _err;
 
     regfree(&preg);
@@ -109,24 +110,24 @@ _err:
 }
 
 void free_title() {
-    free(child_msg->method);
-    free(child_msg->uri);
-    free(child_msg->ver);
+    free(clt_data->method);
+    free(clt_data->uri);
+    free(clt_data->ver);
 }
 
 void free_headers() {
-    for (int i = 0; i < child_msg->header_num; i++) {
-        struct header *header = &child_msg->headers[i];
+    for (int i = 0; i < clt_data->header_num; i++) {
+        struct header *header = &clt_data->headers[i];
         free(header->key);
         free(header->value);
     }
-    free(child_msg->headers);
+    free(clt_data->headers);
 }
 
 void free_message() {
     free_title();
     free_headers();
-    free(child_msg);
+    free(clt_data);
 }
 
 int parse_line(char *line, int line_count) {
@@ -143,8 +144,8 @@ int parse_line(char *line, int line_count) {
 
 char *getheader(char *key) {
     char *ret = NULL; 
-    for (int i = 0; i < child_msg->header_num; i++) {
-        struct header *hdr = &child_msg->headers[i];
+    for (int i = 0; i < clt_data->header_num; i++) {
+        struct header *hdr = &clt_data->headers[i];
         if (strcmp(hdr->key, key)) 
             continue; 
 
@@ -162,8 +163,8 @@ void do_err(void) {
 int do_fwd_clt(void) {
     int bytes = 0; 
     do {
-        bytes += send(clt_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
-    } while (bytes < PROXY_MAX_MSGLEN);
+        bytes += send(clt_sock, srv_msg+bytes, srv_msg_len-bytes, 0);
+    } while (bytes < srv_msg_len);
 
     return 0;
 }
@@ -178,6 +179,8 @@ int do_rcv_srv(void) {
     int ret = recv(srv_sock, srv_msg, PROXY_MAX_MSGLEN, 0);
     if (ret < 0) 
         return -1;
+
+    srv_msg_len = ret;
 
     if (debug) {
         fprintf(stdout, "[%d] Received server message: %s\n", statem, clt_msg);
@@ -224,8 +227,8 @@ int do_fwd_srv(void) {
 
     int bytes = 0;
     do {
-        bytes += send(srv_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
-    } while (bytes < PROXY_MAX_MSGLEN);
+        bytes += send(srv_sock, clt_msg+bytes, clt_msg_len-bytes, 0);
+    } while (bytes < clt_msg_len);
 
     return 0;
 }
@@ -257,6 +260,8 @@ int do_rcv_clt(void) {
     if (ret < 0)
         return -1;
 
+    clt_msg_len = ret;
+
     if (debug) {
         fprintf(stdout, "[%d] Received client message: %s\n", statem, clt_msg);
     }
@@ -273,12 +278,21 @@ int do_alloc(void) {
     if (!srv_msg) 
         return -1;
 
-    child_msg = (struct request *) calloc(1, sizeof(struct request));
-    if (!child_msg) 
+    clt_data = (struct request *) calloc(1, sizeof(struct request));
+    if (!clt_data) 
         return -1;
 
     return 0;
 }
+
+void do_clear(void) {
+    memset(clt_msg, 0, PROXY_MAX_MSGLEN);
+    memset(srv_msg, 0, PROXY_MAX_MSGLEN);
+    memset(clt_data, 0, sizeof(struct request));
+
+    clt_msg_len = 0;
+    srv_msg_len = 0;
+} 
 
 void dostatem() {
     int ret = do_alloc(); 
@@ -322,11 +336,16 @@ void dostatem() {
 
         if (statem & STATEM_FWD_CLT) {
             statem = STATEM_RCV_CLT;
+            do_clear();
             continue;
         }
 
         statem <<= 1;
     }
+
+    free_message();
+    free(clt_msg);
+    free(srv_msg);
 }
 
 void dohelp() {

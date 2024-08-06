@@ -11,4 +11,4 @@ clean:
 	rm -f proxy *.o
 
 tar:
-	tar -cvzf ass1.tgz proxy.c README Makefile proxy_parse.c proxy_parse.h
+	tar -cvzf proxy.tgz proxy.c structs.h README Makefile 
