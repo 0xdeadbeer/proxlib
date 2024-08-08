@@ -15,17 +15,16 @@
                     "[ ]+([a-zA-Z0-9_.,/-]+)[\n\r]*$"
 #define REGEX_HEADER "^([a-zA-Z0-9_-]*):[ \t]+([^\r\n]*)"
 
-#define CLIENT_MESSAGE "GET http://google.com/auth HTTP/1.0\n"\
-                       "\n"\
-                       "Host: google.com\n"\
-                       "Authorization: Bearer ffja2439gjawgjgojserg\n"
+#define CLIENT_MESSAGE "GET http://archive.0xdeadbeer.org/ HTTP/1.0\r\n\r\n"\
+                       "Host: archive.0xdeadbeer.org\r\n"\
 
 #define STATEM_RCV_CLT 0b00000001
 #define STATEM_PRS_CLT 0b00000010
-#define STATEM_FWD_SRV 0b00000100
-#define STATEM_RCV_SRV 0b00001000
-#define STATEM_PRS_SRV 0b00010000
-#define STATEM_FWD_CLT 0b00100000
+#define STATEM_CON_SRV 0b00000100
+#define STATEM_FWD_SRV 0b00001000
+#define STATEM_RCV_SRV 0b00010000
+#define STATEM_PRS_SRV 0b00100000
+#define STATEM_FWD_CLT 0b01000000
 #define STATEM_ERR     0b10000000
 
 struct header {

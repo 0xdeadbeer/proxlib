@@ -162,8 +162,13 @@ void do_err(void) {
 
 int do_fwd_clt(void) {
     int bytes = 0; 
+    int ret = 0; 
     do {
-        bytes += send(clt_sock, srv_msg+bytes, srv_msg_len-bytes, 0);
+        ret = send(clt_sock, srv_msg+bytes, srv_msg_len-bytes, 0);
+        if (ret < 0) 
+            return -1; 
+        
+        bytes += ret;
     } while (bytes < srv_msg_len);
 
     return 0;
@@ -176,20 +181,28 @@ int do_prs_srv(void) {
 }
 
 int do_rcv_srv(void) {
-    int ret = recv(srv_sock, srv_msg, PROXY_MAX_MSGLEN, 0);
-    if (ret < 0) 
-        return -1;
+    int bytes = 0;
+    int ret = 0; 
+    do {
+        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+        if (ret < 0) 
+            return -1;
+        if (!ret) 
+            break;
 
-    srv_msg_len = ret;
+        bytes += ret;
+    } while (bytes < sizeof(PROXY_MAX_MSGLEN));
+
+    srv_msg_len = bytes;
 
     if (debug) {
-        fprintf(stdout, "[%d] Received server message: %s\n", statem, clt_msg);
+        fprintf(stdout, "[%d] Received server message: %s\n", statem, srv_msg);
     }
 
     return 0; 
 }
 
-int con_srv(void) {
+int do_con_srv(void) {
     int ret;
     char *host = getheader("Host");
     if (!host)
@@ -218,16 +231,14 @@ int con_srv(void) {
 }
 
 int do_fwd_srv(void) {
-    int ret = 0;
-    if (srv_sock < 0)
-        ret = con_srv();
-
-    if (ret < 0)
-        return -1;
-
     int bytes = 0;
+    int ret = 0;
     do {
-        bytes += send(srv_sock, clt_msg+bytes, clt_msg_len-bytes, 0);
+        ret = send(srv_sock, clt_msg+bytes, clt_msg_len-bytes, 0);
+        if (ret < 0) 
+            return -1; 
+
+        bytes += ret; 
     } while (bytes < clt_msg_len);
 
     return 0;
@@ -255,12 +266,19 @@ int do_prs_clt(void) {
 }
 
 int do_rcv_clt(void) {
-    int ret; 
-    ret = recv(clt_sock, clt_msg, PROXY_MAX_MSGLEN, 0);
-    if (ret < 0)
-        return -1;
+    int bytes = 0; 
+    int ret = 0;
+    do {
+        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+        if (ret < 0) 
+            return -1;
+        if (!ret) 
+            break;
 
-    clt_msg_len = ret;
+        bytes += ret;
+    } while (bytes < sizeof(PROXY_MAX_MSGLEN));
+
+    clt_msg_len = bytes;
 
     if (debug) {
         fprintf(stdout, "[%d] Received client message: %s\n", statem, clt_msg);
@@ -309,6 +327,9 @@ void dostatem() {
         case STATEM_PRS_CLT: 
             ret = do_prs_clt();
             break; 
+        case STATEM_CON_SRV: 
+            ret = do_con_srv();
+            break;
         case STATEM_FWD_SRV: 
             ret = do_fwd_srv();
             break; 
