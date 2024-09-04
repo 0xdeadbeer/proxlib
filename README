@@ -1,8 +1,8 @@
-+==================+
-|   CUSTOM PROXY   |
-+==================+
++=============+
+|   proxlib   |
++=============+
 
-    Proxy for HTTP/1.0 standard protocol 
+    Proxy C library for HTTP/s protocol 
 
     RFC: datatracker.ietf.org/doc/html/rfc1945
     RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
@@ -12,8 +12,16 @@
 
 TECHNICALS 
 
-    Parsing is done through a chain of regex expressions that verify 
-    the format of received HTTP/1.0 messages.
+    Parsing is carried by a sub-library which I wrote named parslib.
+
+TODO
+
+    * Connect with parslib
+    * Parse port out of Host header (default_value:80)
+    * Implement server message parsing
+    * Verify and search for memory leaks
+    * More testing, debugging, fixing
+    * Implement HTTPS with OpenSSL
 
 COMMITS
     

@@ -8,8 +8,9 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <regex.h>
-#include "structs.h"
+#include "proxlib.h"
 
+int on = 1; 
 int debug = 1; 
 struct request *clt_data;
 regex_t preg; 
@@ -20,13 +21,17 @@ int statem;
 int clt_sock = -1;
 int srv_sock = -1;
 char *clt_msg = NULL;
-int clt_msg_len = 0; 
 char *srv_msg = NULL;
+int clt_msg_len = 0; 
 int srv_msg_len = 0;
 
 void *extractsub(const char *msg, regmatch_t match) {
+    void *buf = NULL;
     int buflen = match.rm_eo - match.rm_so;
-    void *buf = (void *) calloc(1, buflen);
+    if (!buflen)
+        goto _return;
+
+    buf = (void *) calloc(1, buflen);
     if (buf == NULL) 
         goto _return;
 
@@ -77,6 +82,37 @@ _err:
     return -1; 
 }
 
+int parse_host(char *buff) {
+    int ret; 
+
+    ret = regcomp(&preg, REGEX_HOST, REG_EXTENDED); 
+    if (ret != 0) 
+        goto _err;
+
+    ret = regexec(&preg, buff, REGEX_MATCHN, pmatch, 0);
+    if (ret != 0) 
+        goto _err;
+
+    char *host_name = extractsub(buff, pmatch[1]);
+    if (!host_name) 
+        goto _err; 
+
+    char *host_port = extractsub(buff, pmatch[2]);
+    if (!host_port) {
+        host_port = PROXY_DEF_PORT;
+    }
+
+    clt_data->host_name = host_name;
+    clt_data->host_port = host_port;
+
+    regfree(&preg); 
+    return 0;
+
+_err:
+    regfree(&preg);
+    return -1;
+}
+
 int parse_title(char *msgbuff) {
     int ret; 
 
@@ -109,13 +145,18 @@ _err:
 
 }
 
-void free_title() {
+void free_host(void) {
+    free(clt_data->host_name);
+    free(clt_data->host_port);
+}
+
+void free_title(void) {
     free(clt_data->method);
     free(clt_data->uri);
     free(clt_data->ver);
 }
 
-void free_headers() {
+void free_headers(void) {
     for (int i = 0; i < clt_data->header_num; i++) {
         struct header *header = &clt_data->headers[i];
         free(header->key);
@@ -124,10 +165,25 @@ void free_headers() {
     free(clt_data->headers);
 }
 
-void free_message() {
+void free_clt_data(void) {
+    free_host();
     free_title();
     free_headers();
     free(clt_data);
+}
+
+void free_srv_data(void) {
+
+}
+
+void free_msg_buffs(void) {
+    free(clt_msg);
+    free(srv_msg);
+}
+
+void free_data(void) {
+    free_clt_data();
+    free_srv_data();
 }
 
 int parse_line(char *line, int line_count) {
@@ -157,19 +213,20 @@ char *getheader(char *key) {
 
 void do_err(void) {
     int statem_code = statem & (~STATEM_ERR);
-    fprintf(stderr, "[%d,%d,%d] Errored out!\n", statem, statem_code, STATEM_ERR);
+    fprintf(stderr, "[%d,%d,%d] Errored out!\n", statem, statem_code,
+            STATEM_ERR);
 }
 
 int do_fwd_clt(void) {
     int bytes = 0; 
     int ret = 0; 
-    do {
-        ret = send(clt_sock, srv_msg+bytes, srv_msg_len-bytes, 0);
-        if (ret < 0) 
-            return -1; 
-        
+    while (bytes < srv_msg_len) {
+        ret = write(clt_sock, srv_msg+bytes, srv_msg_len-bytes);
+        if (ret < 0)
+            return -1;
+
         bytes += ret;
-    } while (bytes < srv_msg_len);
+    }
 
     return 0;
 }
@@ -183,21 +240,21 @@ int do_prs_srv(void) {
 int do_rcv_srv(void) {
     int bytes = 0;
     int ret = 0; 
-    do {
-        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+    while (bytes < PROXY_MAX_MSGLEN) {
+        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, MSG_PEEK);
         if (ret < 0) 
-            return -1;
+            return -1; 
         if (!ret) 
             break;
+        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
 
-        bytes += ret;
-    } while (bytes < sizeof(PROXY_MAX_MSGLEN));
+        bytes += ret; 
+    }
 
     srv_msg_len = bytes;
 
-    if (debug) {
-        fprintf(stdout, "[%d] Received server message: %s\n", statem, srv_msg);
-    }
+    if (debug)
+        fprintf(stdout, "[%d] Received server message of size %d bytes\n", statem, srv_msg_len);
 
     return 0; 
 }
@@ -207,6 +264,10 @@ int do_con_srv(void) {
     char *host = getheader("Host");
     if (!host)
         return -1;
+
+    ret = parse_host(host);
+    if (ret < 0)
+        return -1;
     
     struct addrinfo hints; 
     struct addrinfo *res;
@@ -215,11 +276,12 @@ int do_con_srv(void) {
     hints.ai_family = AF_INET; 
     hints.ai_socktype = SOCK_STREAM;
 
-    ret = getaddrinfo(host, "80", &hints, &res);
+    ret = getaddrinfo(clt_data->host_name, clt_data->host_port, &hints, &res);
     if (ret < 0) 
         return -1;
 
-    ret = srv_sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    ret = srv_sock = socket(res->ai_family, res->ai_socktype,
+            res->ai_protocol);
     if (ret < 0)
         return -1;
 
@@ -233,13 +295,13 @@ int do_con_srv(void) {
 int do_fwd_srv(void) {
     int bytes = 0;
     int ret = 0;
-    do {
-        ret = send(srv_sock, clt_msg+bytes, clt_msg_len-bytes, 0);
-        if (ret < 0) 
-            return -1; 
+    while (bytes < clt_msg_len) {
+        ret = write(srv_sock, clt_msg+bytes, clt_msg_len-bytes);
+        if (ret < 0)
+            return -1;
 
-        bytes += ret; 
-    } while (bytes < clt_msg_len);
+        bytes += ret;
+    }
 
     return 0;
 }
@@ -268,21 +330,22 @@ int do_prs_clt(void) {
 int do_rcv_clt(void) {
     int bytes = 0; 
     int ret = 0;
-    do {
-        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+    while (bytes < PROXY_MAX_MSGLEN) {
+        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, MSG_PEEK);
         if (ret < 0) 
             return -1;
         if (!ret) 
             break;
 
+        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
+
         bytes += ret;
-    } while (bytes < sizeof(PROXY_MAX_MSGLEN));
+    }
 
     clt_msg_len = bytes;
 
-    if (debug) {
-        fprintf(stdout, "[%d] Received client message: %s\n", statem, clt_msg);
-    }
+    if (debug)
+        fprintf(stdout, "[%d] Received client message of size %d bytes\n", statem, clt_msg_len);
 
     return 0; 
 }
@@ -304,6 +367,8 @@ int do_alloc(void) {
 }
 
 void do_clear(void) {
+    statem = STATEM_RCV_CLT;
+
     memset(clt_msg, 0, PROXY_MAX_MSGLEN);
     memset(srv_msg, 0, PROXY_MAX_MSGLEN);
     memset(clt_data, 0, sizeof(struct request));
@@ -312,7 +377,7 @@ void do_clear(void) {
     srv_msg_len = 0;
 } 
 
-void dostatem() {
+void do_statem() {
     int ret = do_alloc(); 
     if (ret < 0) {
         do_err();
@@ -356,7 +421,6 @@ void dostatem() {
         }
 
         if (statem & STATEM_FWD_CLT) {
-            statem = STATEM_RCV_CLT;
             do_clear();
             continue;
         }
@@ -364,9 +428,8 @@ void dostatem() {
         statem <<= 1;
     }
 
-    free_message();
-    free(clt_msg);
-    free(srv_msg);
+    free_msg_buffs();
+    free_data();
 }
 
 void dohelp() {
@@ -382,23 +445,21 @@ void dohelp() {
     );
 }
 
-int doserver(void) {
-    int ret, server_socket; 
+int do_srv(void) {
+    int ret, proxy_sock; 
+	struct sockaddr_in serv_addr; 
 
-    ret = server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    ret = proxy_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (ret < 0) {
         fprintf(stderr, "Failed to create a socket to listen on\n");
 		return -1;
 	}
 
-    int on = 1; 
-    ret = setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+    ret = setsockopt(proxy_sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
     if (ret < 0) {
         fprintf(stderr, "Failed flagging server socket as reusable\n");
         return -1;
     }
-
-	struct sockaddr_in serv_addr; 
 
 	memset(&serv_addr, 0, sizeof(serv_addr));
 
@@ -406,14 +467,14 @@ int doserver(void) {
 	serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	serv_addr.sin_port = htons(PROXY_PORT);
 
-    ret = bind(server_socket, (struct sockaddr *) &serv_addr,
+    ret = bind(proxy_sock, (struct sockaddr *) &serv_addr,
             sizeof(serv_addr));
 	if (ret < 0) {
         fprintf(stderr, "Failed to bind to port %d\n", PROXY_PORT);
 		return -1;
 	}
 
-	ret = listen(server_socket, PROXY_CONN); 
+	ret = listen(proxy_sock, PROXY_CONN); 
 	if (ret < 0) {
         fprintf(stderr, "Failed to listen on port %d\n", PROXY_PORT);
 		return -1;
@@ -422,12 +483,12 @@ int doserver(void) {
 	fprintf(stdout, "Listening on port %d\n", PROXY_PORT);
 
 	for (;;) {
-		struct sockaddr_in client_addr; 
-        socklen_t client_addrlen = sizeof(client_addr);	
-		int client_socket; 
+		struct sockaddr_in new_clt_addr; 
+        socklen_t new_clt_addr_len= sizeof(new_clt_addr);
+		int new_clt_sock; 
 
-        ret = client_socket = accept(server_socket, (struct sockaddr *)
-                &client_addr, &client_addrlen);
+        ret = new_clt_sock = accept(proxy_sock, (struct sockaddr *)
+                &new_clt_addr, &new_clt_addr_len);
 		if (ret < 0) {
             fprintf(stderr, "Failed to establish socket connection with"
                             "client\n");	
@@ -435,29 +496,27 @@ int doserver(void) {
 		}
 
         ret = fork();
-        switch (ret) {
-        case -1: 
+        if (ret < 0) {
             fprintf(stderr, "[CLIENT SOCKET %d] Failed to fork child process"
-                            "to handle the request\n", client_socket);
+                            "to handle the request\n", new_clt_sock);
             return -1; 
-            break; 
-        case 0: 
-            clt_sock = client_socket;
+        } 
+
+        if (!ret) {
+            clt_sock = new_clt_sock;
             statem = STATEM_RCV_CLT;
-            dostatem();
+            do_statem();
             return 0;
-            break;
-        default: 
-            fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
-                            " with PID %d\n", ret);
-            break;
         }
+
+        fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
+                        " with PID %d\n", ret);
 	}
 
 	return 0;
 }
 
-int doclient(void) {
+int do_clt(void) {
     int ret = 0;
     int client_socket; 
 	struct sockaddr_in serv_addr;
@@ -510,11 +569,11 @@ int main(int argc, char *argv[]) {
     const char *mode = argv[1]; 
     ret = strcmp(mode, SERVER_MODE);
     if (ret == 0)
-        return doserver();
+        return do_srv();
 
     ret = strcmp(mode, CLIENT_MODE); 
     if (ret == 0)
-        return doclient();
+        return do_clt();
 
     fprintf(stderr, "Unknown proxy mode\n");
 }

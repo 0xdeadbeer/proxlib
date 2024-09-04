@@ -1,14 +1,14 @@
 CC=bear --append -- gcc
 CFLAGS= -g3 -Wall -Werror
 
-all: proxy
+all: proxlib
 
-proxy: proxy.c
-	$(CC) $(CFLAGS) -o proxy.o -c proxy.c
-	$(CC) $(CFLAGS) -o proxy proxy.o
+proxy: proxlib.c
+	$(CC) $(CFLAGS) -o proxlib.o -c proxlib.c
+	$(CC) $(CFLAGS) -o proxlib proxlib.o
 
 clean:
-	rm -f proxy *.o
+	rm -f proxlib *.o
 
 tar:
-	tar -cvzf proxy.tgz proxy.c structs.h README Makefile 
+	tar -cvzf proxlib.tgz proxlib.c proxlib.h README Makefile 
