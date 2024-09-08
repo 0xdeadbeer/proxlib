@@ -1,14 +1,16 @@
 CC=bear --append -- gcc
 CFLAGS= -g3 -Wall -Werror
+CFILES=proxlib.c 
+CFILES_PARSLIB=parslib/parslib.final.o
+OUT=proxlib
 
 all: proxlib
 
-proxy: proxlib.c
-	$(CC) $(CFLAGS) -o proxlib.o -c proxlib.c
-	$(CC) $(CFLAGS) -o proxlib proxlib.o
+proxlib: $(CFILES) $(CFILES_PARSLIB)
+	$(CC) $(CFLAGS) -o $(OUT) $^
 
 clean:
-	rm -f proxlib *.o
+	rm -f $(OUT)
 
 tar:
-	tar -cvzf proxlib.tgz proxlib.c proxlib.h README Makefile 
+	tar -cvzf proxlib.tgz $(CFILES) README Makefile 

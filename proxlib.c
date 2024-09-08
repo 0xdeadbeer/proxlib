@@ -7,193 +7,98 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#include <regex.h>
 #include "proxlib.h"
+#include "parslib/parslib.h"
 
 int on = 1; 
-int debug = 1; 
+int debug = 2;
 struct request *clt_data;
-regex_t preg; 
-regmatch_t pmatch[REGEX_MATCHN];
 
 int statem; 
 
 int clt_sock = -1;
 int srv_sock = -1;
-char *clt_msg = NULL;
-char *srv_msg = NULL;
-int clt_msg_len = 0; 
-int srv_msg_len = 0;
 
-void *extractsub(const char *msg, regmatch_t match) {
-    void *buf = NULL;
-    int buflen = match.rm_eo - match.rm_so;
-    if (!buflen)
-        goto _return;
+#define SEGMENT_LEN 512
+#define MAX_BUFF_LEN 128 * 1024
+int _read_line(int fd, char **outbuff) {
+    char tmp_buff[SEGMENT_LEN]; 
+    int tmp_buff_len = 0; 
+    char *output_buff = NULL;
+    int output_buff_len = 0;
+    char *ptr = NULL;
+    int whead_pos = 0;
+    char *whead = NULL;
+    int diff = 0;
+    int ret = 0;
+    int end = 0;
 
-    buf = (void *) calloc(1, buflen);
-    if (buf == NULL) 
-        goto _return;
+    while (!end) {
+        ret = recv(fd, tmp_buff, SEGMENT_LEN, MSG_PEEK);
+        if (ret <= 0) {
+            break;
+        }
 
-    sprintf(buf, "%.*s", buflen, &msg[match.rm_so]); 
+        ptr = strstr(tmp_buff, "\r\n");  
+        if (ptr >= tmp_buff+SEGMENT_LEN) {
+            diff = ret; 
+        } else {
+            diff = ptr - tmp_buff + 2;
+            end = 1;
+        }
 
-_return:
-    return buf;
-}
+        tmp_buff_len = diff;
+        whead_pos = output_buff_len;
+        output_buff_len += tmp_buff_len;
 
-int parse_header(char *msgbuff) {
-    int ret; 
+        if (tmp_buff_len > MAX_BUFF_LEN) {
+            return -1;
+        }
 
-    ret = regcomp(&preg, REGEX_HEADER, REG_EXTENDED);
-    if (ret != 0) 
-        goto _err; 
+        output_buff = (char *) realloc(output_buff, output_buff_len);
+        if (!output_buff) {
+            return -1;
+        }
 
-    ret = regexec(&preg, msgbuff, REGEX_MATCHN, pmatch, 0); 
-    if (ret != 0) 
-        goto _ok; 
-
-    char *key = extractsub(msgbuff, pmatch[1]);
-    if (key == NULL) 
-        goto _err; 
-
-    char *value = extractsub(msgbuff, pmatch[2]);
-    if (value == NULL) 
-        goto _err;
-
-    struct header new_header = {
-        .key = key,
-        .value = value
-    };
-
-    int last_index = clt_data->header_num;
-
-    clt_data->header_num++;
-    clt_data->headers = (void *) realloc(clt_data->headers,
-            clt_data->header_num*sizeof(struct header));
-
-    clt_data->headers[last_index] = new_header;
-
-_ok:
-    regfree(&preg);
-    return 0;
-
-_err: 
-    regfree(&preg);
-    return -1; 
-}
-
-int parse_host(char *buff) {
-    int ret; 
-
-    ret = regcomp(&preg, REGEX_HOST, REG_EXTENDED); 
-    if (ret != 0) 
-        goto _err;
-
-    ret = regexec(&preg, buff, REGEX_MATCHN, pmatch, 0);
-    if (ret != 0) 
-        goto _err;
-
-    char *host_name = extractsub(buff, pmatch[1]);
-    if (!host_name) 
-        goto _err; 
-
-    char *host_port = extractsub(buff, pmatch[2]);
-    if (!host_port) {
-        host_port = PROXY_DEF_PORT;
+        whead = output_buff+whead_pos;
+        ret = recv(fd, whead, diff, 0);
+        if (ret <= 0) {
+            break;
+        }
     }
 
-    clt_data->host_name = host_name;
-    clt_data->host_port = host_port;
-
-    regfree(&preg); 
-    return 0;
-
-_err:
-    regfree(&preg);
-    return -1;
+    *outbuff = output_buff;
+    return output_buff_len;
 }
 
-int parse_title(char *msgbuff) {
-    int ret; 
+/* easy wrapper for _read_line(int fd, void **outbuff) */ 
+int read_line(int fd, 
+              int *line_len, char **line, 
+              int *msgbuff_len, char **msgbuff) {
+    int ret = 0; 
 
-    ret = regcomp(&preg, REGEX_TITLE, REG_EXTENDED);
-    if (ret != 0)
-        goto _err;
-
-    ret = regexec(&preg, msgbuff, REGEX_MATCHN, pmatch, 0);
-    if (ret != 0)
-        goto _err;
-
-    clt_data->method = extractsub(msgbuff, pmatch[1]);
-    if (clt_data->method == NULL) 
-        goto _err;
-
-    clt_data->uri = extractsub(msgbuff, pmatch[2]);
-    if (clt_data->uri == NULL) 
-        goto _err;
-
-    clt_data->ver = extractsub(msgbuff, pmatch[3]); 
-    if (clt_data->ver == NULL)
-        goto _err;
-
-    regfree(&preg);
-    return 0;
-
-_err: 
-    regfree(&preg);
-    return -1; 
-
-}
-
-void free_host(void) {
-    free(clt_data->host_name);
-    free(clt_data->host_port);
-}
-
-void free_title(void) {
-    free(clt_data->method);
-    free(clt_data->uri);
-    free(clt_data->ver);
-}
-
-void free_headers(void) {
-    for (int i = 0; i < clt_data->header_num; i++) {
-        struct header *header = &clt_data->headers[i];
-        free(header->key);
-        free(header->value);
+    ret = *line_len = _read_line(fd, line);
+    if (ret < 0) {
+        return -1;
     }
-    free(clt_data->headers);
-}
 
-void free_clt_data(void) {
-    free_host();
-    free_title();
-    free_headers();
-    free(clt_data);
-}
+    *msgbuff = (char *) realloc(*msgbuff, *msgbuff_len+*line_len);
+    if (!*msgbuff) {
+        free(*line);
+        return -1;
+    }
 
-void free_srv_data(void) {
+    memcpy(*msgbuff+*msgbuff_len, *line, *line_len);
 
-}
+    *msgbuff_len += *line_len;
+    ((char *) *line)[(*line_len)-2] = '\0';
+    *line_len -= 2;
 
-void free_msg_buffs(void) {
-    free(clt_msg);
-    free(srv_msg);
-}
-
-void free_data(void) {
-    free_clt_data();
-    free_srv_data();
+    return 0;
 }
 
 int parse_line(char *line, int line_count) {
     int ret = 0; 
-
-    if (line_count == 0) {
-        ret = parse_title(line);
-    } else {
-        ret = parse_header(line);
-    }
 
     return ret;
 }
@@ -218,7 +123,7 @@ void do_err(void) {
 }
 
 int do_fwd_clt(void) {
-    int bytes = 0; 
+    /*int bytes = 0; 
     int ret = 0; 
     while (bytes < srv_msg_len) {
         ret = write(clt_sock, srv_msg+bytes, srv_msg_len-bytes);
@@ -226,7 +131,7 @@ int do_fwd_clt(void) {
             return -1;
 
         bytes += ret;
-    }
+    }*/
 
     return 0;
 }
@@ -238,7 +143,7 @@ int do_prs_srv(void) {
 }
 
 int do_rcv_srv(void) {
-    int bytes = 0;
+    /*int bytes = 0;
     int ret = 0; 
     while (bytes < PROXY_MAX_MSGLEN) {
         ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, MSG_PEEK);
@@ -253,21 +158,18 @@ int do_rcv_srv(void) {
 
     srv_msg_len = bytes;
 
-    if (debug)
+    if (debug == 1)
         fprintf(stdout, "[%d] Received server message of size %d bytes\n", statem, srv_msg_len);
+    */
 
     return 0; 
 }
 
+// TODO
 int do_con_srv(void) {
     int ret;
-    char *host = getheader("Host");
-    if (!host)
-        return -1;
 
-    ret = parse_host(host);
-    if (ret < 0)
-        return -1;
+    // MISSING HOST
     
     struct addrinfo hints; 
     struct addrinfo *res;
@@ -293,7 +195,7 @@ int do_con_srv(void) {
 }
 
 int do_fwd_srv(void) {
-    int bytes = 0;
+    /*int bytes = 0;
     int ret = 0;
     while (bytes < clt_msg_len) {
         ret = write(srv_sock, clt_msg+bytes, clt_msg_len-bytes);
@@ -301,97 +203,102 @@ int do_fwd_srv(void) {
             return -1;
 
         bytes += ret;
-    }
+    }*/
 
     return 0;
 }
 
-int do_prs_clt(void) {
-    int ret;
-    int ln_cnt = 0;
-
-    char *ln = strdup(clt_msg);
-    if (!ln)
-        return -1;
-
-    ln = strtok(ln, "\n");
-    while (ln) {
-        ret = parse_line(ln, ln_cnt);
-        if (ret < 0)
-            return -1;
-
-        ln_cnt++;
-        ln = strtok(NULL, "\n");
-    }
-
-    return 0; 
-}
-
-int do_rcv_clt(void) {
-    int bytes = 0; 
+int do_rcv_clt(struct conn *conn) {
     int ret = 0;
-    while (bytes < PROXY_MAX_MSGLEN) {
-        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, MSG_PEEK);
-        if (ret < 0) 
-            return -1;
-        if (!ret) 
-            break;
+    char *line = NULL; 
+    char *msgbuff = NULL;
+    int line_len = 0; 
+    int msgbuff_len = 0;
 
-        ret = recv(clt_sock, clt_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
-
-        bytes += ret;
+    // request line 
+    ret = read_line(conn->cltfd, &line_len, &line, &msgbuff_len, &msgbuff);
+    if (ret < 0) {
+        fprintf(stderr, "Failed receiving request line\n");
+        return -1;
     }
 
-    clt_msg_len = bytes;
+    if (debug == 1) {
+        fprintf(stdout, "debug - received line: %s\n", line);
+    }
 
-    if (debug)
-        fprintf(stdout, "[%d] Received client message of size %d bytes\n", statem, clt_msg_len);
+    ret = pareqtitl(line, line_len, &(conn->cltreq.titl));    
+    if (ret < 0) {
+        fprintf(stderr, "Failed parsing request line\n");
+        return -1;
+    }
+
+    if (debug == 1) {
+        fprintf(stdout, "debug - parsed request line\n");
+    }
+
+    free(line);
+
+    // headers
+    int next_header = 1; 
+    while (next_header) {
+        ret = read_line(conn->cltfd, &line_len, &line, &msgbuff_len, &msgbuff);
+        if (ret < 0) {
+            fprintf(stderr, "Failed receiving header line\n");
+            return -1;
+        }
+
+        if (line_len == 0) {
+            if (debug == 1) {
+                fprintf(stdout, "debug - reached end of headers\n");
+            }
+            next_header = 0;
+            continue;
+        }
+
+        if (debug == 1) {
+            fprintf(stdout, "debug - received line: %s\n", line);
+        }
+
+        ret = parshfield(line, line_len, conn->cltreq.hentries);
+        if (ret < 0) {
+            fprintf(stderr, "Failed parsing header field\n");
+            return -1;
+        }
+
+        if (debug == 1) {
+            fprintf(stdout, "debug - parsed header field\n");
+        }
+
+        free(line);
+    }
+
+    if (debug <= 2) {
+        fprintf(stdout, "printing parsed request\n");
+        printfpareq(&conn->cltreq);
+    }
 
     return 0; 
-}
-
-int do_alloc(void) {
-    clt_msg = (char *) calloc(1, PROXY_MAX_MSGLEN);
-    if (!clt_msg)
-        return -1;
-
-    srv_msg = (char *) calloc(1, PROXY_MAX_MSGLEN);
-    if (!srv_msg) 
-        return -1;
-
-    clt_data = (struct request *) calloc(1, sizeof(struct request));
-    if (!clt_data) 
-        return -1;
-
-    return 0;
 }
 
 void do_clear(void) {
     statem = STATEM_RCV_CLT;
-
-    memset(clt_msg, 0, PROXY_MAX_MSGLEN);
-    memset(srv_msg, 0, PROXY_MAX_MSGLEN);
-    memset(clt_data, 0, sizeof(struct request));
-
-    clt_msg_len = 0;
-    srv_msg_len = 0;
 } 
 
 void do_statem() {
-    int ret = do_alloc(); 
-    if (ret < 0) {
-        do_err();
-        return;
+    int ret = 0;
+    struct conn *conn = (struct conn *) calloc(1, sizeof(struct conn));
+    if (!conn) {
+        fprintf(stderr, "Not enough dynamic memory to establish connection\n");
+        return; 
     }
-        
+
+    conn->cltfd = clt_sock;
+
     for (int counter = 0; counter < MAX_BOUND; counter++) {
         switch (statem & (~STATEM_ERR)) {
         case STATEM_RCV_CLT:
-            ret = do_rcv_clt();
+            ret = do_rcv_clt(conn);
             break;
-        case STATEM_PRS_CLT: 
-            ret = do_prs_clt();
-            break; 
         case STATEM_CON_SRV: 
             ret = do_con_srv();
             break;
@@ -401,15 +308,12 @@ void do_statem() {
         case STATEM_RCV_SRV: 
             ret = do_rcv_srv();
             break;
-        case STATEM_PRS_SRV: 
-            ret = do_prs_srv();
-            break; 
         case STATEM_FWD_CLT:
             ret = do_fwd_clt();
             break;
         default: 
             ret = -1; 
-            break; 
+            break;
         }
 
         if (ret < 0) 
@@ -428,8 +332,7 @@ void do_statem() {
         statem <<= 1;
     }
 
-    free_msg_buffs();
-    free_data();
+    free(conn);
 }
 
 void dohelp() {
@@ -566,6 +469,12 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
+    ret = initres();
+    if (ret < 0) {
+        fprintf(stderr, "Failed generating trees\n");
+        return -1;
+    } 
+
     const char *mode = argv[1]; 
     ret = strcmp(mode, SERVER_MODE);
     if (ret == 0)
@@ -576,4 +485,6 @@ int main(int argc, char *argv[]) {
         return do_clt();
 
     fprintf(stderr, "Unknown proxy mode\n");
+
+    fretres();
 }

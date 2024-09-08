@@ -1,7 +1,11 @@
 #ifndef STRUCTS_H
 #define STRUCTS_H
 
+#include "parslib/parslib.h"
+
+#ifndef MAX_BOUND
 #define MAX_BOUND 10000
+#endif
 
 #define SERVER_MODE "server"
 #define CLIENT_MODE "client"
@@ -22,13 +26,11 @@
                        "Host: archive.0xdeadbeer.org\r\n"\
 
 #define STATEM_RCV_CLT 0b00000001
-#define STATEM_PRS_CLT 0b00000010
-#define STATEM_CON_SRV 0b00000100
-#define STATEM_FWD_SRV 0b00001000
-#define STATEM_RCV_SRV 0b00010000
-#define STATEM_PRS_SRV 0b00100000
-#define STATEM_FWD_CLT 0b01000000
-#define STATEM_ERR     0b10000000
+#define STATEM_CON_SRV 0b00000010
+#define STATEM_FWD_SRV 0b00000100
+#define STATEM_RCV_SRV 0b00001000
+#define STATEM_FWD_CLT 0b00010000
+#define STATEM_ERR     0b00100000
 
 struct header {
     char *key; 
@@ -44,6 +46,14 @@ struct request {
     char *ver; 
     int header_num;
     struct header *headers;
+};
+
+struct conn {
+    int cltfd; 
+    int srvfd; 
+
+    struct httpareq cltreq;
+    struct httpares srvres; 
 };
 
 #endif

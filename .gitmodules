@@ -1,0 +1,3 @@
+[submodule "parslib"]
+	path = parslib
+	url = http://git.0xdeadbeer.xyz/0xdeadbeer/parslib
