@@ -12,12 +12,7 @@
 
 int on = 1; 
 int debug = 2;
-struct request *clt_data;
-
 int statem; 
-
-int clt_sock = -1;
-int srv_sock = -1;
 
 #define SEGMENT_LEN 512
 #define MAX_BUFF_LEN 128 * 1024
@@ -103,19 +98,6 @@ int parse_line(char *line, int line_count) {
     return ret;
 }
 
-char *getheader(char *key) {
-    char *ret = NULL; 
-    for (int i = 0; i < clt_data->header_num; i++) {
-        struct header *hdr = &clt_data->headers[i];
-        if (strcmp(hdr->key, key)) 
-            continue; 
-
-        ret = hdr->value; 
-    }
-
-    return ret; 
-}
-
 void do_err(void) {
     int statem_code = statem & (~STATEM_ERR);
     fprintf(stderr, "[%d,%d,%d] Errored out!\n", statem, statem_code,
@@ -167,10 +149,10 @@ int do_rcv_srv(void) {
 
 // TODO
 int do_con_srv(void) {
-    int ret;
-
     // MISSING HOST
     
+    /*
+    int ret; 
     struct addrinfo hints; 
     struct addrinfo *res;
 
@@ -189,7 +171,7 @@ int do_con_srv(void) {
 
     ret = connect(srv_sock, res->ai_addr, res->ai_addrlen);
     if (ret < 0)
-        return -1;
+        return -1; */
 
     return 0;
 }
@@ -280,39 +262,19 @@ int do_rcv_clt(struct conn *conn) {
     return 0; 
 }
 
-void do_clear(void) {
+void do_clear(struct conn *conn) {
     statem = STATEM_RCV_CLT;
+    frepareq(&conn->cltreq);
+    frepares(&conn->srvres);
 } 
 
-void do_statem() {
+void do_statem(struct conn *conn) {
     int ret = 0;
-    struct conn *conn = (struct conn *) calloc(1, sizeof(struct conn));
-    if (!conn) {
-        fprintf(stderr, "Not enough dynamic memory to establish connection\n");
-        return; 
-    }
-
-    conn->cltfd = clt_sock;
 
     for (int counter = 0; counter < MAX_BOUND; counter++) {
         switch (statem & (~STATEM_ERR)) {
         case STATEM_RCV_CLT:
             ret = do_rcv_clt(conn);
-            break;
-        case STATEM_CON_SRV: 
-            ret = do_con_srv();
-            break;
-        case STATEM_FWD_SRV: 
-            ret = do_fwd_srv();
-            break; 
-        case STATEM_RCV_SRV: 
-            ret = do_rcv_srv();
-            break;
-        case STATEM_FWD_CLT:
-            ret = do_fwd_clt();
-            break;
-        default: 
-            ret = -1; 
             break;
         }
 
@@ -325,27 +287,12 @@ void do_statem() {
         }
 
         if (statem & STATEM_FWD_CLT) {
-            do_clear();
+            do_clear(conn);
             continue;
         }
 
         statem <<= 1;
     }
-
-    free(conn);
-}
-
-void dohelp() {
-    printf(
-        "+====================+\n"
-        "|   HTTP/1.0 PROXY   |\n"
-        "+=====@0xdeadbeer====+\n"
-        "usage:\n"
-        " ./proxy [mode]\n"
-        "mode:\n"
-        " * server -> start listening as proxy\n"
-        " * client -> send test requests to server\n"
-    );
 }
 
 int do_srv(void) {
@@ -405,86 +352,42 @@ int do_srv(void) {
             return -1; 
         } 
 
-        if (!ret) {
-            clt_sock = new_clt_sock;
-            statem = STATEM_RCV_CLT;
-            do_statem();
-            return 0;
+        if (ret > 0) {
+            fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
+                            " with PID %d\n", ret);
+            continue;
         }
 
-        fprintf(stdout, "[PROGRAM] Successfully forked a new child process"
-                        " with PID %d\n", ret);
+        // child 
+        struct conn *conn = (struct conn *) calloc(1, sizeof(struct conn));
+        if (!conn) {
+            fprintf(stderr, "Not enough dynamic memory to establish connection\n");
+            return -1;
+        }
+
+        conn->cltfd = new_clt_sock;
+        statem = STATEM_RCV_CLT;
+        do_statem(conn);
+        free(conn);
+
+        if (debug == 1) {
+            fprintf(stdout, "Finished proxying client\n");
+        }
+
+        return 0;
 	}
 
 	return 0;
 }
 
-int do_clt(void) {
-    int ret = 0;
-    int client_socket; 
-	struct sockaddr_in serv_addr;
-
-    ret = client_socket = socket(AF_INET, SOCK_STREAM, 0); 
-	if(ret < 0)
-	{
-        fprintf(stderr, "Failed creating socket\n");
-		return -1;
-	}
-
-	memset(&serv_addr, '0', sizeof(serv_addr));
-
-	serv_addr.sin_family = AF_INET;
-	serv_addr.sin_port = htons(PROXY_PORT);
-
-    ret = inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr);
-	if(ret <= 0)
-	{
-        fprintf(stderr, "Inet_pton error\n");
-		return -1;
-	}
-
-    ret = connect(client_socket, (struct sockaddr *) &serv_addr,
-            sizeof(serv_addr));
-	if(ret < 0)
-	{
-        fprintf(stderr, "Failed connecting to remote server\n");
-		return -1;
-	}
-
-    int bytes = 0; 
-    do {
-        bytes += send(client_socket, CLIENT_MESSAGE, 
-                sizeof(CLIENT_MESSAGE), 0);
-    } while (bytes != sizeof(CLIENT_MESSAGE));
-
-    fprintf(stdout, "Sent %d bytes to server\n", bytes);
-
-    return 0;
-}
-
 int main(int argc, char *argv[]) {
-	int ret; 
-    if (argc != 2) {
-        dohelp();
-        return 0;
-    }
-
-    ret = initres();
+    int ret = initres();
     if (ret < 0) {
         fprintf(stderr, "Failed generating trees\n");
         return -1;
     } 
 
-    const char *mode = argv[1]; 
-    ret = strcmp(mode, SERVER_MODE);
-    if (ret == 0)
-        return do_srv();
-
-    ret = strcmp(mode, CLIENT_MODE); 
-    if (ret == 0)
-        return do_clt();
-
-    fprintf(stderr, "Unknown proxy mode\n");
+    return do_srv();
 
     fretres();
 }
