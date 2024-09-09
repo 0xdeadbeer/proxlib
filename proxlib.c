@@ -148,11 +148,34 @@ int do_rcv_srv(void) {
 }
 
 // TODO
-int do_con_srv(void) {
-    // MISSING HOST
-    
-    /*
-    int ret; 
+int do_con_srv(struct conn *conn) {
+    int ret = 0;
+    struct httpareq *req = &conn->cltreq;
+    struct point *host = &req->hentries[header_host];
+    if (host->er == NULL) {
+        if (debug <= 2) {
+            fprintf(stderr, "debug - request does not have HOST header\n");
+        }
+        goto _exit;
+    }
+
+    struct hostinfo *info = (struct hostinfo *) calloc(1, sizeof(struct hostinfo));
+    if (!info) {
+        goto _exit;
+    }
+
+    ret = pahostinfo(host->er, host->len, info);
+    if (ret < 0) {
+        if (debug <= 2) {
+            fprintf(stderr, "Failed parsing upstream host header\n");
+        }
+        goto _exit_hostinfo;
+    }
+
+    if (debug <= 2) {
+        fprintf(stdout, "Establishing connection with upstream: %.*s : %.*s\n", info->hostname_len, info->hostname, info->service_len, info->service);
+    }
+
     struct addrinfo hints; 
     struct addrinfo *res;
 
@@ -160,20 +183,30 @@ int do_con_srv(void) {
     hints.ai_family = AF_INET; 
     hints.ai_socktype = SOCK_STREAM;
 
-    ret = getaddrinfo(clt_data->host_name, clt_data->host_port, &hints, &res);
-    if (ret < 0) 
-        return -1;
+    ret = getaddrinfo(info->hostname, info->service, &hints, &res);
+    if (ret < 0) {
+        goto _exit_hostinfo;
+    }
 
-    ret = srv_sock = socket(res->ai_family, res->ai_socktype,
+    ret = conn->srvfd = socket(res->ai_family, res->ai_socktype,
             res->ai_protocol);
-    if (ret < 0)
-        return -1;
+    if (ret < 0) {
+        goto _exit_getaddrinfo;
+    }
 
-    ret = connect(srv_sock, res->ai_addr, res->ai_addrlen);
-    if (ret < 0)
-        return -1; */
+    ret = connect(conn->srvfd, res->ai_addr, res->ai_addrlen);
+    if (ret < 0) {
+        goto _exit_getaddrinfo;
+    }
 
-    return 0;
+_exit_getaddrinfo:
+    freeaddrinfo(res);
+_exit_hostinfo:
+    free(info->hostname);
+    free(info->service);
+    free(info);
+_exit:
+    return ret;
 }
 
 int do_fwd_srv(void) {
@@ -254,6 +287,9 @@ int do_rcv_clt(struct conn *conn) {
         free(line);
     }
 
+    // body
+    // TODO
+
     if (debug <= 2) {
         fprintf(stdout, "printing parsed request\n");
         printfpareq(&conn->cltreq);
@@ -275,6 +311,9 @@ void do_statem(struct conn *conn) {
         switch (statem & (~STATEM_ERR)) {
         case STATEM_RCV_CLT:
             ret = do_rcv_clt(conn);
+            break;
+        case STATEM_CON_SRV:
+            ret = do_con_srv(conn);
             break;
         }
 
