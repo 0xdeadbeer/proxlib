@@ -12,16 +12,30 @@
 
 TECHNICALS 
 
-    Parsing is carried by a sub-library which I wrote named parslib.
+    * Parsing is carried by a dedicated sub-library which I wrote named parslib.
+    * Mass string comparisons are carried by another dedicated sub-library which
+    I wrote named streecmp. It runs in O(n) time. n being the lenght of the string - 
+    no matter the amount of strings you want to compare it against (I am indeed 
+    aware it is nonetheless worse than hashtables - maybe one day I will implement 
+    those on my own as well).
 
-TODO
+TASKS
 
-    * Connect with parslib
-    * Parse port out of Host header (default_value:80)
-    * Implement server message parsing
-    * Verify and search for memory leaks
-    * More testing, debugging, fixing
-    * Implement HTTPS with OpenSSL
+    [DONE] Forward data between client/server
+    [DONE] Connect with parslib
+        [DONE] Implement client message parsing
+        [DONE] Implement server message parsing
+    [DONE] Add loose string checking for headers
+    [DOING] Cover all possible body segmentation standards
+        [DONE] Cover Content-Length
+        [DOING] Cover "chunked transfer encoding"
+        [DOING] Cover "compress transfer encoding"
+        [DOING] Cover "deflate transfer encoding"
+        [DOING] Cover "gzip/x-gzip transfer encoding"
+    [ACTIVELY DOING] More testing, debugging, fixing
+    [ACTIVELY DOING] Verify and search for memory leaks
+    [TODO] Implement HTTPS with OpenSSL, LibreSSL, or BearSSL
+    [TODO] Caching?
 
 COMMITS
     

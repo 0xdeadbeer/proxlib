@@ -22,8 +22,9 @@ struct conn {
     int srvfd; 
 
     char *cltbuff;
-    int cltbuff_len;
     char *srvbuff;
+
+    int cltbuff_len;
     int srvbuff_len;
 
     struct httpareq cltreq;
