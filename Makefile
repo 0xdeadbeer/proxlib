@@ -1,5 +1,5 @@
 CC=bear --append -- gcc
-CFLAGS= -g3 -Wall -Werror
+CFLAGS=-g3 
 CFILES=proxlib.c 
 CFILES_PARSLIB=parslib/parslib.final.o
 OUT=proxlib

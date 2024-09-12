@@ -21,6 +21,11 @@ struct conn {
     int cltfd; 
     int srvfd; 
 
+    char *cltbuff;
+    int cltbuff_len;
+    char *srvbuff;
+    int srvbuff_len;
+
     struct httpareq cltreq;
     struct httpares srvres; 
 };

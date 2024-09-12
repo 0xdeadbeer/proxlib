@@ -11,7 +11,7 @@
 #include "parslib/parslib.h"
 
 int on = 1; 
-int debug = 2;
+int debug = 3;
 int statem; 
 
 #define SEGMENT_LEN 512
@@ -104,50 +104,143 @@ void do_err(void) {
             STATEM_ERR);
 }
 
-int do_fwd_clt(void) {
-    /*int bytes = 0; 
-    int ret = 0; 
-    while (bytes < srv_msg_len) {
-        ret = write(clt_sock, srv_msg+bytes, srv_msg_len-bytes);
+int do_fwd_clt(struct conn *conn) {
+    int bytes = 0;
+    int ret = 0;
+    while (bytes < conn->srvbuff_len) {
+        ret = write(conn->cltfd, conn->srvbuff+bytes, conn->srvbuff_len-bytes);
         if (ret < 0)
             return -1;
 
         bytes += ret;
-    }*/
+    }
 
     return 0;
 }
 
-// TODO: add parsing ability
-int do_prs_srv(void) {
-    int ret = 0; 
-    return ret; 
-}
+int do_rcv_srv(struct conn *conn) {
+    int ret = 0;
+    char *line = NULL; 
+    char *msgbuff = NULL;
+    int line_len = 0; 
+    int msgbuff_len = 0;
 
-int do_rcv_srv(void) {
-    /*int bytes = 0;
-    int ret = 0; 
-    while (bytes < PROXY_MAX_MSGLEN) {
-        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, MSG_PEEK);
-        if (ret < 0) 
-            return -1; 
-        if (!ret) 
-            break;
-        ret = recv(srv_sock, srv_msg+bytes, PROXY_MAX_MSGLEN-bytes, 0);
-
-        bytes += ret; 
+    // response line 
+    ret = read_line(conn->srvfd, &line_len, &line, &msgbuff_len, &msgbuff);
+    if (ret < 0) {
+        fprintf(stderr, "Failed receiving response line from upstream\n");
+        return -1;
     }
 
-    srv_msg_len = bytes;
+    if (debug == 1) {
+        fprintf(stdout, "debug - [upstream] received line: %s\n", line);
+    }
 
-    if (debug == 1)
-        fprintf(stdout, "[%d] Received server message of size %d bytes\n", statem, srv_msg_len);
-    */
+    ret = parestitl(line, line_len, &(conn->srvres.titl));    
+    if (ret < 0) {
+        fprintf(stderr, "Failed parsing response line\n");
+        return -1;
+    }
+
+    if (debug == 1) {
+        fprintf(stdout, "debug - [upstream] parsed response line\n");
+    }
+
+    free(line);
+
+    // headers
+    int next_header = 1; 
+    while (next_header) {
+        ret = read_line(conn->srvfd, &line_len, &line, &msgbuff_len, &msgbuff);
+        if (ret < 0) {
+            fprintf(stderr, "Failed receiving header line\n");
+            return -1;
+        }
+
+        if (line_len == 0) {
+            if (debug == 1) {
+                fprintf(stdout, "debug - [upstream] reached end of headers\n");
+            }
+            next_header = 0;
+            continue;
+        }
+
+        if (debug == 1) {
+            fprintf(stdout, "debug - [upstream] received line: %s\n", line);
+        }
+
+        ret = parshfield(line, line_len, conn->srvres.hentries);
+        if (ret < 0) {
+            fprintf(stderr, "Failed parsing header field\n");
+            return -1;
+        }
+
+        if (debug == 1) {
+            fprintf(stdout, "debug - parsed header field\n");
+        }
+
+        free(line);
+    }
+
+    // body
+body:
+    struct httpares *res = &conn->srvres;
+    struct point *content_length_entry = &res->hentries[header_content_length];
+    if (content_length_entry->er == NULL) {
+        fprintf(stderr, "[upstream] no content length header\n");
+        return -1;
+    }
+
+    int content_length = 0;
+    ret = stoin(content_length_entry->er, content_length_entry->len, &content_length);
+    if (ret < 0) {
+        fprintf(stderr, "[upstream] failed parsing content length header\n");
+        return -1;
+    }
+
+    line_len = content_length;
+    line = (char *) calloc(1, line_len);
+    if (!line) {
+        fprintf(stderr, "[upstream] not enough dynamic memory\n");
+        return -1;
+    }
+
+    int bytes = 0;
+    do {
+        ret = recv(conn->srvfd, line+bytes, line_len-bytes, MSG_WAITALL);
+        if (ret < 0) {
+            fprintf(stderr, "[upstream] failed reading body from response\n");
+            return -1;
+        }
+        bytes += ret;
+    } while (bytes < line_len);
+
+    msgbuff = (char *) realloc(msgbuff, msgbuff_len+line_len);
+    if (!msgbuff) {
+        fprintf(stderr, "[upstream] not enough dynamic memory\n");
+        return -1;
+    }
+
+    memcpy(msgbuff+msgbuff_len, line, line_len);
+    msgbuff_len += line_len;
+
+    if (debug <= 2) {
+        fprintf(stdout, "------------------------------\n");
+        fprintf(stdout, "debug - [upstream] received body %d: %.*s\n", line_len, line_len, line);
+        fprintf(stdout, "------------------------------\n");
+    }
+
+    if (debug <= 2) {
+        fprintf(stdout, "printing parsed response\n");
+        printfpares(&conn->srvres);
+    }
+
+    conn->srvbuff = msgbuff;
+    conn->srvbuff_len = msgbuff_len;
 
     return 0; 
 }
 
-// TODO
 int do_con_srv(struct conn *conn) {
     int ret = 0;
     struct httpareq *req = &conn->cltreq;
@@ -209,16 +302,16 @@ _exit:
     return ret;
 }
 
-int do_fwd_srv(void) {
-    /*int bytes = 0;
+int do_fwd_srv(struct conn *conn) {
+    int bytes = 0;
     int ret = 0;
-    while (bytes < clt_msg_len) {
-        ret = write(srv_sock, clt_msg+bytes, clt_msg_len-bytes);
+    while (bytes < conn->cltbuff_len) {
+        ret = write(conn->srvfd, conn->cltbuff+bytes, conn->cltbuff_len-bytes);
         if (ret < 0)
             return -1;
 
         bytes += ret;
-    }*/
+    }
 
     return 0;
 }
@@ -295,6 +388,9 @@ int do_rcv_clt(struct conn *conn) {
         printfpareq(&conn->cltreq);
     }
 
+    conn->cltbuff = msgbuff;
+    conn->cltbuff_len = msgbuff_len;
+
     return 0; 
 }
 
@@ -302,6 +398,8 @@ void do_clear(struct conn *conn) {
     statem = STATEM_RCV_CLT;
     frepareq(&conn->cltreq);
     frepares(&conn->srvres);
+    free(conn->cltbuff);
+    free(conn->srvbuff);
 } 
 
 void do_statem(struct conn *conn) {
@@ -314,6 +412,15 @@ void do_statem(struct conn *conn) {
             break;
         case STATEM_CON_SRV:
             ret = do_con_srv(conn);
+            break;
+        case STATEM_FWD_SRV: 
+            ret = do_fwd_srv(conn);
+            break;
+        case STATEM_RCV_SRV: 
+            ret = do_rcv_srv(conn);
+            break;
+        case STATEM_FWD_CLT: 
+            ret = do_fwd_clt(conn);
             break;
         }
 
