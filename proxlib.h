@@ -4,18 +4,47 @@
 #include "parslib/parslib.h"
 
 #ifndef MAX_BOUND
-#define MAX_BOUND 10000
+#define MAX_BOUND 100000000000
 #endif
 
 #define PROXY_PORT 2020
 #define PROXY_CONN 20
 
-#define STATEM_RCV_CLT 0b00000001
-#define STATEM_CON_SRV 0b00000010
-#define STATEM_FWD_SRV 0b00000100
-#define STATEM_RCV_SRV 0b00001000
-#define STATEM_FWD_CLT 0b00010000
-#define STATEM_ERR     0b00100000
+enum states {
+    state_rcv_clt = 0,
+    state_con_srv,
+    state_fwd_srv,
+    state_rcv_srv,
+    state_fwd_clt
+};
+
+enum errs {
+    err_generic = 1,
+    err_mem,
+    err_recv,
+    err_pars,
+    err_parstitle,
+    err_parsheader,
+    err_support
+};
+
+char *states_str[] = {
+    "state_rcv_clt",
+    "state_con_srv",
+    "state_fwd_srv",
+    "state_rcv_srv",
+    "state_fwd_clt"
+};
+
+char *errs_str[] = {
+    "err_generic",
+    "err_mem",
+    "err_recv",
+    "err_pars",
+    "err_parstitle",
+    "err_parsheader",
+    "err_support"
+};
 
 struct conn {
     int cltfd; 

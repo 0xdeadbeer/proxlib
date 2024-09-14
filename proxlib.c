@@ -11,8 +11,9 @@
 #include "parslib/parslib.h"
 
 int on = 1; 
-int debug = 3;
-int statem; 
+int debug = 1;
+int statem = 0; 
+int err = 0;
 
 #define SEGMENT_LEN 512
 #define MAX_BUFF_LEN 128 * 1024
@@ -92,16 +93,91 @@ int read_line(int fd,
     return 0;
 }
 
-int parse_line(char *line, int line_count) {
+int pull_content_length(int fd, int len, int *msgbuff_len, char **msgbuff) {
     int ret = 0; 
+    int line_len = len;
+    char *line = (char *) calloc(1, line_len);
+    if (!line) {
+        return err_mem;
+    }
 
-    return ret;
+    int bytes = 0;
+    do {
+        ret = recv(fd, line+bytes, line_len-bytes, MSG_WAITALL);
+        if (ret < 0) {
+            return err_recv;
+        }
+        bytes += ret;
+    } while (bytes < line_len);
+
+    *msgbuff = (char *) realloc(*msgbuff, *msgbuff_len+line_len);
+    if (!*msgbuff) {
+        return err_mem;
+    }
+
+    memcpy(*msgbuff+*msgbuff_len, line, line_len);
+    *msgbuff_len += line_len;
+
+    return 0;
+}
+
+int pull_chunked_encoding(int fd, int *msgbuff_len, char **msgbuff) {
+	int ret = 0; 
+	char *line = NULL;
+	int line_len = 0; 
+
+	while (1) {
+		ret = read_line(fd, &line_len, &line, msgbuff_len, msgbuff);
+		if (ret < 0) {
+			fprintf(stderr, "Failed receiving chunked body from upstream\n");
+			return -1;
+		}
+
+		line_len = strtol(line, (char **) 0, 16); 
+		if (!line_len) {
+			break;
+		}
+
+		line_len += 2;
+
+		free(line);
+
+		line = (char *) calloc(1, line_len);
+		if (!line) {
+			fprintf(stderr, "Not enough dynamic memory\n");
+			return -1;
+		}
+
+		int bytes = 0; 
+		do {
+			ret = recv(fd, line+bytes, line_len-bytes, MSG_WAITALL); 
+			if (ret < 0) {
+				fprintf(stderr, "Failed reading respones body from server\n");
+				return -1;
+			}
+			bytes += ret;
+		} while (bytes < line_len); 
+
+		*msgbuff = (char *) realloc(*msgbuff, *msgbuff_len+line_len);
+		if (!msgbuff) {
+			fprintf(stderr, "Not enough dynamic memory\n");
+			return -1;
+		}
+
+		memcpy(*msgbuff+*msgbuff_len, line, line_len);
+		*msgbuff_len += line_len;
+		if (debug == 1) {
+			fprintf(stdout, "debug - [upstream] received chunk:%d\n", line_len);
+		}
+		free(line);
+	}
+    return 0;
+
 }
 
 void do_err(void) {
-    int statem_code = statem & (~STATEM_ERR);
-    fprintf(stderr, "[%d,%d,%d] Errored out!\n", statem, statem_code,
-            STATEM_ERR);
+    fprintf(stderr, "[%s] failed with error code %d=%s\n", 
+            states_str[statem], err, errs_str[err]);
 }
 
 int do_fwd_clt(struct conn *conn) {
@@ -111,7 +187,6 @@ int do_fwd_clt(struct conn *conn) {
         ret = write(conn->cltfd, conn->srvbuff+bytes, conn->srvbuff_len-bytes);
         if (ret < 0)
             return -1;
-
         bytes += ret;
     }
 
@@ -128,8 +203,7 @@ int do_rcv_srv(struct conn *conn) {
     // response line 
     ret = read_line(conn->srvfd, &line_len, &line, &msgbuff_len, &msgbuff);
     if (ret < 0) {
-        fprintf(stderr, "Failed receiving response line from upstream\n");
-        return -1;
+        return err_recv;
     }
 
     if (debug == 1) {
@@ -138,8 +212,7 @@ int do_rcv_srv(struct conn *conn) {
 
     ret = parestitl(line, line_len, &(conn->srvres.titl));    
     if (ret < 0) {
-        fprintf(stderr, "Failed parsing response line\n");
-        return -1;
+        return err_parstitle;
     }
 
     if (debug == 1) {
@@ -153,8 +226,7 @@ int do_rcv_srv(struct conn *conn) {
     while (next_header) {
         ret = read_line(conn->srvfd, &line_len, &line, &msgbuff_len, &msgbuff);
         if (ret < 0) {
-            fprintf(stderr, "Failed receiving header line\n");
-            return -1;
+            return err_recv;
         }
 
         if (line_len == 0) {
@@ -171,8 +243,7 @@ int do_rcv_srv(struct conn *conn) {
 
         ret = parshfield(line, line_len, conn->srvres.hentries);
         if (ret < 0) {
-            fprintf(stderr, "Failed parsing header field\n");
-            return -1;
+            return err_parsheader;
         }
 
         if (debug == 1) {
@@ -183,58 +254,33 @@ int do_rcv_srv(struct conn *conn) {
     }
 
     // body
-body:
     struct httpares *res = &conn->srvres;
     struct point *content_length_entry = &res->hentries[header_content_length];
-    if (content_length_entry->er == NULL) {
-        fprintf(stderr, "[upstream] no content length header\n");
-        return -1;
-    }
-
-    int content_length = 0;
-    ret = stoin(content_length_entry->er, content_length_entry->len, &content_length);
-    if (ret < 0) {
-        fprintf(stderr, "[upstream] failed parsing content length header\n");
-        return -1;
-    }
-
-    line_len = content_length;
-    line = (char *) calloc(1, line_len);
-    if (!line) {
-        fprintf(stderr, "[upstream] not enough dynamic memory\n");
-        return -1;
-    }
-
-    int bytes = 0;
-    do {
-        ret = recv(conn->srvfd, line+bytes, line_len-bytes, MSG_WAITALL);
+    struct point *transfer_encoding_entry = &res->hentries[header_transfer_encoding];
+    if (content_length_entry->er) {
+        int content_length = 0;
+ 
+        ret = stoin(content_length_entry->er, content_length_entry->len, &content_length);
         if (ret < 0) {
-            fprintf(stderr, "[upstream] failed reading body from response\n");
-            return -1;
+            return err_pars;
         }
-        bytes += ret;
-    } while (bytes < line_len);
 
-    msgbuff = (char *) realloc(msgbuff, msgbuff_len+line_len);
-    if (!msgbuff) {
-        fprintf(stderr, "[upstream] not enough dynamic memory\n");
-        return -1;
+        ret = pull_content_length(conn->srvfd, content_length, &msgbuff_len, &msgbuff);
+        if (ret < 0) {
+            return err_recv;
+        }
+        fprintf(stdout, "Successfully received normal body from server\n");
+    } else if (transfer_encoding_entry->er && strcmp(transfer_encoding_entry->er, "chunked") == 0) {
+	    ret = pull_chunked_encoding(conn->srvfd, &msgbuff_len, &msgbuff);
+	    if (ret < 0) {
+            return err_recv;
+	    }
+	    fprintf(stdout, "Successfully received chunked body from server\n");
+    } else {
+        return err_support;
     }
 
-    memcpy(msgbuff+msgbuff_len, line, line_len);
-    msgbuff_len += line_len;
-
-    if (debug <= 2) {
-        fprintf(stdout, "------------------------------\n");
-        fprintf(stdout, "debug - [upstream] received body %d: %.*s\n", line_len, line_len, line);
-        fprintf(stdout, "------------------------------\n");
-    }
-
-    if (debug <= 2) {
-        fprintf(stdout, "printing parsed response\n");
-        printfpares(&conn->srvres);
-    }
-
+    fprintf(stdout, "srvbuff:%p+srvbuff_len:%d\n", conn->srvbuff, conn->srvbuff_len);
     conn->srvbuff = msgbuff;
     conn->srvbuff_len = msgbuff_len;
 
@@ -246,23 +292,17 @@ int do_con_srv(struct conn *conn) {
     struct httpareq *req = &conn->cltreq;
     struct point *host = &req->hentries[header_host];
     if (host->er == NULL) {
-        if (debug <= 2) {
-            fprintf(stderr, "debug - request does not have HOST header\n");
-        }
-        goto _exit;
+        return err_pars;
     }
 
     struct hostinfo *info = (struct hostinfo *) calloc(1, sizeof(struct hostinfo));
     if (!info) {
-        goto _exit;
+        return err_mem;
     }
 
     ret = pahostinfo(host->er, host->len, info);
     if (ret < 0) {
-        if (debug <= 2) {
-            fprintf(stderr, "Failed parsing upstream host header\n");
-        }
-        goto _exit_hostinfo;
+        return err_pars;
     }
 
     if (debug <= 2) {
@@ -278,27 +318,31 @@ int do_con_srv(struct conn *conn) {
 
     ret = getaddrinfo(info->hostname, info->service, &hints, &res);
     if (ret < 0) {
-        goto _exit_hostinfo;
+        free(info->hostname);
+        free(info->service);
+        free(info);
+        return err_pars;
     }
 
     ret = conn->srvfd = socket(res->ai_family, res->ai_socktype,
             res->ai_protocol);
     if (ret < 0) {
-        goto _exit_getaddrinfo;
+        freeaddrinfo(res);
+        free(info->hostname);
+        free(info->service);
+        free(info);
+        return err_pars;
     }
 
     ret = connect(conn->srvfd, res->ai_addr, res->ai_addrlen);
     if (ret < 0) {
-        goto _exit_getaddrinfo;
+        freeaddrinfo(res);
+        free(info->hostname);
+        free(info->service);
+        free(info);
+        return err_pars;
     }
 
-_exit_getaddrinfo:
-    freeaddrinfo(res);
-_exit_hostinfo:
-    free(info->hostname);
-    free(info->service);
-    free(info);
-_exit:
     return ret;
 }
 
@@ -309,7 +353,6 @@ int do_fwd_srv(struct conn *conn) {
         ret = write(conn->srvfd, conn->cltbuff+bytes, conn->cltbuff_len-bytes);
         if (ret < 0)
             return -1;
-
         bytes += ret;
     }
 
@@ -324,24 +367,23 @@ int do_rcv_clt(struct conn *conn) {
     int msgbuff_len = 0;
 
     // request line 
+    fprintf(stdout, "debug - listening for new lines from client\n");
     ret = read_line(conn->cltfd, &line_len, &line, &msgbuff_len, &msgbuff);
     if (ret < 0) {
-        fprintf(stderr, "Failed receiving request line\n");
-        return -1;
+        return err_recv;
     }
 
     if (debug == 1) {
-        fprintf(stdout, "debug - received line: %s\n", line);
+        fprintf(stdout, "debug - received line of %d bytes from client\n", line_len);
     }
 
     ret = pareqtitl(line, line_len, &(conn->cltreq.titl));    
     if (ret < 0) {
-        fprintf(stderr, "Failed parsing request line\n");
-        return -1;
+        return err_parstitle;
     }
 
     if (debug == 1) {
-        fprintf(stdout, "debug - parsed request line\n");
+        fprintf(stdout, "[do_rcv_clt] parsed request line\n");
     }
 
     free(line);
@@ -351,13 +393,12 @@ int do_rcv_clt(struct conn *conn) {
     while (next_header) {
         ret = read_line(conn->cltfd, &line_len, &line, &msgbuff_len, &msgbuff);
         if (ret < 0) {
-            fprintf(stderr, "Failed receiving header line\n");
-            return -1;
+            return err_recv;
         }
 
         if (line_len == 0) {
             if (debug == 1) {
-                fprintf(stdout, "debug - reached end of headers\n");
+                fprintf(stdout, "[do_rcv_clt] reached end of headers for the client\n");
             }
             next_header = 0;
             continue;
@@ -369,8 +410,7 @@ int do_rcv_clt(struct conn *conn) {
 
         ret = parshfield(line, line_len, conn->cltreq.hentries);
         if (ret < 0) {
-            fprintf(stderr, "Failed parsing header field\n");
-            return -1;
+            return err_parsheader;
         }
 
         if (debug == 1) {
@@ -381,13 +421,31 @@ int do_rcv_clt(struct conn *conn) {
     }
 
     // body
-    // TODO
+    struct httpareq *req = &conn->cltreq;
+    struct point *content_length_entry = &req->hentries[header_content_length];
+    struct point *transfer_encoding_entry = &req->hentries[header_transfer_encoding];
+    if (content_length_entry->er) {
+        int content_length = 0;
 
-    if (debug <= 2) {
-        fprintf(stdout, "printing parsed request\n");
-        printfpareq(&conn->cltreq);
-    }
+        ret = stoin(content_length_entry->er, content_length_entry->len, &content_length);
+        if (ret < 0) {
+            return err_pars;
+        }
 
+        ret = pull_content_length(conn->srvfd, content_length, &msgbuff_len, &msgbuff);
+        if (ret < 0) {
+            return err_recv;
+        }
+
+        fprintf(stdout, "Successfully received normal body from server\n");
+    } else if (transfer_encoding_entry->er && strcmp(transfer_encoding_entry->er, "chunked") == 0) {
+	    ret = pull_chunked_encoding(conn->srvfd, &msgbuff_len, &msgbuff);
+	    if (ret < 0) {
+            return err_recv;
+	    }
+	    fprintf(stdout, "Successfully received chunked body from server\n");
+    } 
+    
     conn->cltbuff = msgbuff;
     conn->cltbuff_len = msgbuff_len;
 
@@ -395,7 +453,7 @@ int do_rcv_clt(struct conn *conn) {
 }
 
 void do_clear(struct conn *conn) {
-    statem = STATEM_RCV_CLT;
+    statem = state_rcv_clt;
     frepareq(&conn->cltreq);
     frepares(&conn->srvres);
     free(conn->cltbuff);
@@ -406,38 +464,39 @@ void do_statem(struct conn *conn) {
     int ret = 0;
 
     for (int counter = 0; counter < MAX_BOUND; counter++) {
-        switch (statem & (~STATEM_ERR)) {
-        case STATEM_RCV_CLT:
+        switch (statem) {
+        case state_rcv_clt:
             ret = do_rcv_clt(conn);
             break;
-        case STATEM_CON_SRV:
+        case state_con_srv:
             ret = do_con_srv(conn);
             break;
-        case STATEM_FWD_SRV: 
+        case state_fwd_srv: 
             ret = do_fwd_srv(conn);
             break;
-        case STATEM_RCV_SRV: 
+        case state_rcv_srv: 
             ret = do_rcv_srv(conn);
             break;
-        case STATEM_FWD_CLT: 
+        case state_fwd_clt: 
             ret = do_fwd_clt(conn);
             break;
         }
 
-        if (ret < 0) 
-            statem |= STATEM_ERR;
+        if (ret > 0) {
+            err = ret;
+        }
 
-        if (statem & STATEM_ERR) {
+        if (err) {
             do_err();
             break;
         }
 
-        if (statem & STATEM_FWD_CLT) {
+        if (statem == state_fwd_clt) {
             do_clear(conn);
             continue;
         }
 
-        statem <<= 1;
+        statem++;
     }
 }
 
@@ -512,13 +571,9 @@ int do_srv(void) {
         }
 
         conn->cltfd = new_clt_sock;
-        statem = STATEM_RCV_CLT;
+        statem = state_rcv_clt;
         do_statem(conn);
         free(conn);
-
-        if (debug == 1) {
-            fprintf(stdout, "Finished proxying client\n");
-        }
 
         return 0;
 	}
