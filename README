@@ -4,11 +4,16 @@
 
     Proxy C library for HTTP/s protocol 
 
+    NOTE: I have yet to turn this piece of clutter into a library. 
+
     RFC: datatracker.ietf.org/doc/html/rfc1945
     RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
     RES: Beej's Guide to Network Programming - Using Internet Sockets
     RES: en.wikipedia.org/wiki/Proxy_server
     RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition
+
+    RES: tinyproxy.github.io/
+    RES: github.com/nginx/nginx
 
 TECHNICALS 
 
@@ -18,6 +23,10 @@ TECHNICALS
     no matter the amount of strings you want to compare it against (I am indeed 
     aware it is nonetheless worse than hashtables - maybe one day I will implement 
     those on my own as well).
+    * After the connection is established with the upstream server, a relay loop 
+    is started in which the client data is relayed to the server's socket and 
+    server data is relayed to client's socket. This is highly inspired from 
+    tinyproxy.
 
 TASKS
 
@@ -26,15 +35,16 @@ TASKS
         [DONE] Implement client message parsing
         [DONE] Implement server message parsing
     [DONE] Add loose string checking for headers
+    [DONE] Relaying mechanism
     [DOING] Cover all possible body segmentation standards
         [DONE] Cover Content-Length
-        [DOING] Cover "chunked transfer encoding"
-        [DOING] Cover "compress transfer encoding"
-        [DOING] Cover "deflate transfer encoding"
-        [DOING] Cover "gzip/x-gzip transfer encoding"
+        [DONE] Cover "chunked transfer encoding"
+        [TODO] Cover "compress transfer encoding"
+        [TODO] Cover "deflate transfer encoding"
+        [TODO] Cover "gzip/x-gzip transfer encoding"
     [ACTIVELY DOING] More testing, debugging, fixing
     [ACTIVELY DOING] Verify and search for memory leaks
-    [TODO] Implement HTTPS with OpenSSL, LibreSSL, or BearSSL
+    [TODO] Implement HTTPS
     [TODO] Caching?
 
 COMMITS
