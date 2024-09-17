@@ -1,3 +1,4 @@
 *.o
 proxy
 compile_commands.json
+.cache

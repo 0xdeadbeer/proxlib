@@ -9,41 +9,35 @@
 
 #define PROXY_PORT 2020
 #define PROXY_CONN 20
+#define RELAY_BUFFER_SIZE 1024*2
+#define RELAY_POLL_TIMEOUT 1000
 
 enum states {
     state_rcv_clt = 0,
     state_con_srv,
     state_fwd_srv,
     state_rcv_srv,
-    state_fwd_clt
+    state_fwd_clt,
+    state_ok
 };
 
-enum errs {
-    err_generic = 1,
-    err_mem,
-    err_recv,
-    err_pars,
-    err_parstitle,
-    err_parsheader,
-    err_support
-};
+#define ERR_GENERIC     -1 
+#define ERR_MEM         -2
+#define ERR_RECV        -3
+#define ERR_SEND        -4
+#define ERR_PARS        -5
+#define ERR_PARSTITLE   -6
+#define ERR_PARSHEADER  -7
+#define ERR_SUPPORT     -8
+#define ERR_TIMEOUT     -9
 
 char *states_str[] = {
     "state_rcv_clt",
     "state_con_srv",
     "state_fwd_srv",
     "state_rcv_srv",
-    "state_fwd_clt"
-};
-
-char *errs_str[] = {
-    "err_generic",
-    "err_mem",
-    "err_recv",
-    "err_pars",
-    "err_parstitle",
-    "err_parsheader",
-    "err_support"
+    "state_fwd_clt",
+    "state_ok"
 };
 
 struct conn {
