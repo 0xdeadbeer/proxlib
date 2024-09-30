@@ -2,17 +2,24 @@
 |   proxlib   |
 +=============+
 
-    Proxy C library for HTTP/s protocol 
+    Proxy C library for HTTP/HTTPs 
 
-    NOTE: I have yet to turn this piece of clutter into a library. 
+KEYS
+
+    NOT -> NOTE
+    RFC -> RFC DOCUMENT 
+    RES -> RESOURCE 
+
+    NOT: I have yet to turn this piece of clutter into a library. 
 
     RFC: datatracker.ietf.org/doc/html/rfc1945
     RES: cs.princeton.edu/courses/archive/spr13/cos461/assignments-proxy.html
-    RES: Beej's Guide to Network Programming - Using Internet Sockets
     RES: en.wikipedia.org/wiki/Proxy_server
+    RES: en.wikipedia.org/wiki/HTTP_tunnel#HTTP_CONNECT_method
+    RES: Beej's Guide to Network Programming - Using Internet Sockets
     RES: TCP/IP sockets in C - Practical guide for programmers 2nd edition
 
-    RES: tinyproxy.github.io/
+    RES: tinyproxy.github.io
     RES: github.com/nginx/nginx
 
 TECHNICALS 
@@ -27,25 +34,33 @@ TECHNICALS
     is started in which the client data is relayed to the server's socket and 
     server data is relayed to client's socket. This is highly inspired from 
     tinyproxy.
+    * HTTPs is achieved through CONNECT tunelling 
+        RES: en.wikipedia.org/wiki/HTTP_tunnel#HTTP_CONNECT_method
 
 TASKS
 
-    [DONE] Forward data between client/server
-    [DONE] Connect with parslib
-        [DONE] Implement client message parsing
-        [DONE] Implement server message parsing
-    [DONE] Add loose string checking for headers
-    [DONE] Relaying mechanism
-    [DOING] Cover all possible body segmentation standards
-        [DONE] Cover Content-Length
-        [DONE] Cover "chunked transfer encoding"
-        [TODO] Cover "compress transfer encoding"
-        [TODO] Cover "deflate transfer encoding"
-        [TODO] Cover "gzip/x-gzip transfer encoding"
-    [ACTIVELY DOING] More testing, debugging, fixing
-    [ACTIVELY DOING] Verify and search for memory leaks
-    [TODO] Implement HTTPS
-    [TODO] Caching?
+    + indicates it being DONE
+    * indicates it ACTIVELY BEING TAKEN CARE OF
+    @ indicates it being TODO
+    ? indicates that I am still unsure whether to spend my time on it
+
+    [+] forward data between client/server
+    [+] connect with parslib
+        implement client message parsing
+        implement server message parsing
+    [+] add loose string checking for headers
+    [+] relaying mechanism
+    [+] implement HTTPS
+    [+] cover all possible body segmentation standards
+        cover Content-Length
+        cover "chunked transfer encoding"
+    [*] more testing, debugging, fixing
+    [*] verify and search for memory leaks
+    [?] caching
+    [?] hashtables for header lookup
+    [?] support "compress transfer encoding"
+    [?] support "deflate transfer encoding"
+    [?] support "gzip/x-gzip transfer encoding"
 
 COMMITS
     
