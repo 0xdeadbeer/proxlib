@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -187,7 +188,8 @@ int do_con_srv(struct conn *conn) {
         return ERR_PARS;
     }
 
-    struct hostinfo *info = (struct hostinfo *) calloc(1, sizeof(struct hostinfo));
+    struct hostinfo *info = 
+        (struct hostinfo *) calloc(1, sizeof(struct hostinfo));
     if (!info) {
         return ERR_MEM;
     }
@@ -280,20 +282,24 @@ int do_rcv_clt(struct conn *conn) {
     // body
     struct httpareq *req = &conn->cltreq;
     struct point *content_length_entry = &req->hentries[header_content_length];
-    struct point *transfer_encoding_entry = &req->hentries[header_transfer_encoding];
+    struct point *transfer_encoding_entry =
+        &req->hentries[header_transfer_encoding];
     if (content_length_entry->er) {
         int content_length = 0;
 
-        ret = stoin(content_length_entry->er, content_length_entry->len, &content_length);
+        ret = stoin(content_length_entry->er, 
+                content_length_entry->len, &content_length);
         if (ret < 0) {
             return ERR_PARS;
         }
 
-        ret = pull_content_length(conn->srvfd, content_length, &msgbuff_len, &msgbuff);
+        ret = pull_content_length(conn->srvfd, 
+                content_length, &msgbuff_len, &msgbuff);
         if (ret < 0) {
             return ERR_RECV;
         }
-    } else if (transfer_encoding_entry->er && strcmp(transfer_encoding_entry->er, "chunked") == 0) {
+    } else if (transfer_encoding_entry->er &&
+            strcmp(transfer_encoding_entry->er, "chunked") == 0) {
 	    ret = pull_chunked_encoding(conn->srvfd, &msgbuff_len, &msgbuff);
 	    if (ret < 0) {
             return ERR_RECV;
@@ -372,6 +378,35 @@ void do_statem(struct conn *conn) {
         do_err();
     }
 
+    // TODO: add stanard checks for detecting real TLS connections
+    //       and prevent fake/forged ones.
+    if (conn->cltreq.titl.method == method_connect) {
+        int size = snprintf(NULL, 0, "%.*s 200 Connection established\r\n"
+                                     "Proxy-agent: proxlib\r\n"
+                                     "\r\n", 
+                                     conn->cltreq.titl.ver.len, conn->cltreq.titl.ver.er
+                );
+        size += 1;
+        char *msg = (char *) malloc(size);
+        memset(msg, 0, size);
+        snprintf(msg, size, "%.*s 200 Connection established\r\n"
+                                     "Proxy-agent: proxlib\r\n"
+                                     "\r\n", 
+                                     conn->cltreq.titl.ver.len, conn->cltreq.titl.ver.er
+                );
+        
+        ret = write_buffer(conn->cltfd, &msg, &size);
+        if (ret < 0) {
+            fprintf(stderr, "Failed writing to client: %s\n", strerror(errno));
+            return;
+        }
+
+        free(msg);
+        free(conn->cltbuff);
+        conn->cltbuff = 0; 
+        conn->cltbuff_len = 0;
+    }
+
     // relay the data between the two sockets until the end of time
     ssize_t bytes_received;
 	struct pollfd fds[2];
@@ -379,6 +414,9 @@ void do_statem(struct conn *conn) {
 	    memset(fds, 0, 2*sizeof(struct pollfd));
         fds[0].fd = conn->cltfd;
         fds[1].fd = conn->srvfd;
+
+        fds[0].events |= POLLHUP;
+        fds[1].events |= POLLHUP;
 
         if (conn->srvbuff_len > 0) {
             fds[0].events |= POLLOUT;
@@ -396,18 +434,41 @@ void do_statem(struct conn *conn) {
         ret = poll(fds, 2, 1000);
 
         if (fds[1].revents & POLLOUT) {
-            ret = write_buffer(conn->srvfd, &conn->cltbuff, &conn->cltbuff_len);
+            ret = write_buffer(conn->srvfd, 
+                    &conn->cltbuff, &conn->cltbuff_len);
         }
+        if (ret < 0) {
+            break;
+        }
+
         if (fds[1].revents & POLLIN) {
-            ret = read_buffer(conn->srvfd, &conn->srvbuff, &conn->srvbuff_len);
+            ret = read_buffer(conn->srvfd, 
+                    &conn->srvbuff, &conn->srvbuff_len);
         }
+        if (ret < 0) {
+            break;
+        }
+
         if (fds[0].revents & POLLIN) {
-            ret = read_buffer(conn->cltfd, &conn->cltbuff, &conn->cltbuff_len);
+            ret = read_buffer(conn->cltfd, 
+                    &conn->cltbuff, &conn->cltbuff_len);
         }
+        if (ret < 0) {
+            break;
+        }
+
         if (fds[0].revents & POLLOUT) {
-            ret = write_buffer(conn->cltfd, &conn->srvbuff, &conn->srvbuff_len);
+            ret = write_buffer(conn->cltfd, 
+                    &conn->srvbuff, &conn->srvbuff_len);
         }
+        if (ret < 0) {
+            break;
+        }
+
         if (fds[0].revents & POLLHUP) {
+            break;
+        }
+        if (fds[1].revents & POLLHUP) {
             break;
         }
         if (ret < 0) {
@@ -492,7 +553,8 @@ int do_srv(void) {
         // request process
         struct conn *conn = (struct conn *) calloc(1, sizeof(struct conn));
         if (!conn) {
-            fprintf(stderr, "Not enough dynamic memory to establish connection\n");
+            fprintf(stderr, "Not enough dynamic memory "
+                    "to establish connection\n");
             return -1;
         }
 
